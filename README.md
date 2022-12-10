@@ -9,4 +9,4 @@ is that these systems have been much more optimized to maximize audience and sal
 to the end users.
 
 _Lens_ is an attempt to improve this situation, by providing the end users with tools that can be used to further filter content that is actually of
-interest to them, instead of only taking into account the interest of big tech companies with large infrastructures and budgets.
+interest to them, instead of having the end user and their data exposed as a simple resource for big tech companies to harvest. 
