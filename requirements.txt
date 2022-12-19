@@ -1,2 +1,0 @@
-proxy-tools==0.1.0
-pywebview==3.7.2
