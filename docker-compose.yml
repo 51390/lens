@@ -1,0 +1,7 @@
+version: "3.9"
+
+services:
+  proxy:
+    image: 51390/lens/squid
+    ports:
+      - 3128:3128
