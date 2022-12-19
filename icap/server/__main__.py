@@ -15,16 +15,23 @@ class ICAPHandler(BaseICAPRequestHandler):
         self.set_icap_response(200)
         self.set_icap_header('Methods', 'RESPMOD')
         self.set_icap_header('Preview', '0')
-        self.send_headers(False)
-        print('Got OPTIONS call')
+        self.send_headers(True)
 
     def request_RESPMOD(self):
+        self._inspect()
         self.no_adaptation_required()
-        print('Got RESPMOD call')
 
     def request_REQMOD(self):
+        self._inspect()
         self.no_adaptation_required()
-        print('Got REQMOD call')
+
+    def _inspect(self):
+        print(self.encapsulated)
+        while not self.ieof:
+            chunk = self.read_chunk()
+            if not chunk:
+                break
+            print('CHUNK >> ' + str(chunk))
 
 port = 13440
 
