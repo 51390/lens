@@ -20,3 +20,12 @@ RUN make
 RUN make install
 
 WORKDIR $INSTALL_PATH
+
+ADD conf/squid/* /squid/etc/
+RUN chmod 400 /squid/etc/bump*
+RUN /squid/libexec/security_file_certgen -c -s /squid/var/cache/squid/ssl_db -M 20MB
+RUN chmod a+w -R /squid/var/logs 
+
+ADD bin/entrypoint.sh /squid/bin/entrypoint.sh
+
+ENTRYPOINT bash /squid/bin/entrypoint.sh
