@@ -1,4 +1,14 @@
 .PHONY: squid
 
-squid:
-	docker build ./squid -t 51390/lens/squid
+build:
+	docker compose build
+
+start:
+	docker compose up
+
+stop:
+	docker compose stop
+
+clean:
+	docker compose down
+
