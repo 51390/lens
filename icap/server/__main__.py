@@ -1,6 +1,7 @@
 #!/bin/env python
 # -*- coding: utf8 -*-
 
+import sys
 import random
 import SocketServer
 
@@ -32,6 +33,8 @@ class ICAPHandler(BaseICAPRequestHandler):
             if not chunk:
                 break
             print('CHUNK >> ' + str(chunk))
+
+        sys.stdout.flush()
 
 port = 13440
 
