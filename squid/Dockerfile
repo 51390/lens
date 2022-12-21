@@ -1,12 +1,5 @@
 FROM ubuntu
 
-ARG BUILD_PATH=/tmp/build
-ARG INSTALL_PATH=/squid
-
-
-RUN mkdir $BUILD_PATH
-WORKDIR $BUILD_PATH
-
 RUN apt update -y
 RUN apt install -y  wget gcc g++ automake autoconf libtool openssl libssl-dev libcppunit-dev make pkg-config
 
@@ -21,7 +14,7 @@ RUN ./configure && make && make install
 
 # sample ecap adapter
 ARG ECAP_ADAPTER_BUILD_PATH=/tmp/build-ecap-adapter
-RUN mkdir 
+RUN mkdir $ECAP_ADAPTER_BUILD_PATH
 WORKDIR $ECAP_ADAPTER_BUILD_PATH
 RUN wget https://www.e-cap.org/archive/ecap_adapter_sample-1.0.0.tar.gz
 RUN tar xvfpz ecap_adapter_sample-1.0.0.tar.gz
@@ -32,6 +25,10 @@ RUN ./configure && make && make install
 RUN ldconfig
 
 # squid, proper
+ARG BUILD_PATH=/tmp/build
+ARG INSTALL_PATH=/squid
+RUN mkdir $BUILD_PATH
+WORKDIR $BUILD_PATH
 RUN wget http://www.squid-cache.org/Versions/v5/squid-5.7.tar.gz
 RUN tar xvpfz squid-5.7.tar.gz
 
