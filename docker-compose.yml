@@ -6,11 +6,3 @@ services:
       context: ./squid
     ports:
       - 3128:3128
-    depends_on:
-      - icap
-
-  icap:
-    build:
-      context: ./icap
-    ports:
-      - 13440:13440
