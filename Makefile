@@ -1,4 +1,4 @@
-.PHONY: squid
+.PHONY: deps build start stop clean down
 
 build:
 	docker compose build
@@ -9,6 +9,6 @@ start:
 stop:
 	docker compose stop
 
-clean:
+down:
 	docker compose down
 
