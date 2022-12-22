@@ -329,7 +329,7 @@ void Adapter::Xaction::adaptContent(std::string &chunk) const {
 		pos += replacement.size();
 	}
 
-    printf("adaptContent called.\n")
+    printf("adaptContent called.\n");
 }
 
 // tells the host that we are not interested in [more] vb
