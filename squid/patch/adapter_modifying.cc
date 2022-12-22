@@ -308,6 +308,9 @@ void Adapter::Xaction::noteVbContentAvailable()
 
 	const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
 	std::string chunk = vb.toString(); // expensive, but simple
+    FILE* f = fopen("/tmp/chunks.log", "a+");
+    fprintf(f, "CHUNK (%d): >>\n %s \n<<\n", chunk.length(), chunk.c_str());
+    fclose(f);
 	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
 	adaptContent(chunk);
 	buffer += chunk; // buffer what we got
