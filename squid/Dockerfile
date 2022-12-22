@@ -11,17 +11,6 @@ RUN wget https://www.e-cap.org/archive/libecap-1.0.0.tar.gz
 RUN tar xvpfz libecap-1.0.0.tar.gz
 WORKDIR $ECAP_BUILD_PATH/libecap-1.0.0
 RUN ./configure && make && make install
-
-# sample ecap adapter
-ARG ECAP_ADAPTER_BUILD_PATH=/tmp/build-ecap-adapter
-RUN mkdir $ECAP_ADAPTER_BUILD_PATH
-WORKDIR $ECAP_ADAPTER_BUILD_PATH
-RUN wget https://www.e-cap.org/archive/ecap_adapter_sample-1.0.0.tar.gz
-RUN tar xvfpz ecap_adapter_sample-1.0.0.tar.gz
-WORKDIR ecap_adapter_sample-1.0.0
-COPY ./patch/adapter_async.cc src/adapter_async.cc
-RUN ./configure && make && make install
-
 RUN ldconfig
 
 # squid, proper
@@ -38,6 +27,18 @@ RUN bash bootstrap.sh
 RUN ./configure --disable-dependency-tracking --enable-ssl-crtd --with-openssl --disable-strict-error-checking --enable-ecap --prefix=$INSTALL_PATH
 RUN make
 RUN make install
+
+# sample ecap adapter
+ARG ECAP_ADAPTER_BUILD_PATH=/tmp/build-ecap-adapter
+RUN mkdir $ECAP_ADAPTER_BUILD_PATH
+WORKDIR $ECAP_ADAPTER_BUILD_PATH
+RUN wget https://www.e-cap.org/archive/ecap_adapter_sample-1.0.0.tar.gz
+RUN tar xvfpz ecap_adapter_sample-1.0.0.tar.gz
+WORKDIR ecap_adapter_sample-1.0.0
+COPY ./patch/adapter_async.cc src/adapter_async.cc
+COPY ./patch/adapter_modifying.cc src/adapter_modifying.cc
+RUN ./configure && make && make install
+RUN ldconfig
 
 WORKDIR $INSTALL_PATH
 
