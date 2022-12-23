@@ -19,7 +19,6 @@ using libecap::size_type;
 libecap::Name headerContentEncoding("Content-Encoding", libecap::Name::NextId());
 
 FILE* adaptationLog;
-FILE* chunkFile = 0;
 
 void initLog() {
     adaptationLog = fopen("/tmp/adaptation.log", "a+");
@@ -30,19 +29,7 @@ void endLog() {
     fprintf(adaptationLog, "STOP\n");
     fclose(adaptationLog);
 }
-void initFile(const char* name) {
-    chunkFile = fopen(name, "a+");
-}
 
-void writeFile(const void* stuff, size_t stuffSize, size_t howMuchStuff) {
-    if(chunkFile) {
-        fwrite(stuff, stuffSize, howMuchStuff, chunkFile);
-    }
-}
-
-void endFile() {
-    fclose(chunkFile);
-}
 
 class Service: public libecap::adapter::Service {
 	public:
@@ -124,13 +111,32 @@ class Xaction: public libecap::adapter::Xaction {
 	private:
 		libecap::shared_ptr<const Service> service; // configuration access
 		libecap::host::Xaction *hostx; // Host transaction rep
+        
+        void initFile(const char*);
+        void endFile();
+        void writeFile(const void* stuff, size_t stuffSize, size_t howMuchStuff);
 
 		std::string buffer; // for content adaptation
+        FILE* chunkFile = 0;
 
 		typedef enum { opUndecided, opOn, opComplete, opNever } OperationState;
 		OperationState receivingVb;
 		OperationState sendingAb;
 };
+
+void Adapter::Xaction::initFile(const char* name) {
+    chunkFile = fopen(name, "a+");
+}
+
+void Adapter::Xaction::writeFile(const void* stuff, size_t stuffSize, size_t howMuchStuff) {
+    if(chunkFile) {
+        fwrite(stuff, stuffSize, howMuchStuff, chunkFile);
+    }
+}
+
+void Adapter::Xaction::endFile() {
+    fclose(chunkFile);
+}
 
 static const std::string CfgErrorPrefix =
 	"Modifying Adapter: configuration error: ";
@@ -351,7 +357,7 @@ void Adapter::Xaction::noteVbContentAvailable()
 
 	const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
 	std::string chunk = vb.toString(); // expensive, but simple
-    fprintf(adaptationLog, "CHUNK (%d): >>\n %s \n<<\n", chunk.length(), chunk.c_str());
+    fprintf(adaptationLog, "CHUNK (%ld): >>\n %s \n<<\n", chunk.length(), chunk.c_str());
     writeFile(chunk.c_str(), sizeof(char), chunk.length());
 	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
 	buffer += chunk; // buffer what we got
