@@ -1,4 +1,5 @@
 #include "sample.h"
+#include <cstring>
 #include <iostream>
 #include <libecap/common/registry.h>
 #include <libecap/common/errors.h>
@@ -14,6 +15,34 @@
 namespace Adapter { // not required, but adds clarity
 
 using libecap::size_type;
+
+libecap::Name headerContentEncoding("Content-Encoding", libecap::Name::NextId());
+
+FILE* adaptationLog;
+FILE* chunkFile = 0;
+
+void initLog() {
+    adaptationLog = fopen("/tmp/adaptation.log", "a+");
+    fprintf(adaptationLog, "START\n");
+}
+
+void endLog() {
+    fprintf(adaptationLog, "STOP\n");
+    fclose(adaptationLog);
+}
+void initFile(const char* name) {
+    chunkFile = fopen(name, "a+");
+}
+
+void writeFile(const void* stuff, size_t stuffSize, size_t howMuchStuff) {
+    if(chunkFile) {
+        fwrite(stuff, stuffSize, howMuchStuff, chunkFile);
+    }
+}
+
+void endFile() {
+    fclose(chunkFile);
+}
 
 class Service: public libecap::adapter::Service {
 	public:
@@ -209,7 +238,10 @@ void Adapter::Xaction::visitEachOption(libecap::NamedValueVisitor &) const {
 	// this transaction has no meta-information to pass to the visitor
 }
 
+int counter = 0;
+
 void Adapter::Xaction::start() {
+    initLog();
 	Must(hostx);
 	if (hostx->virgin().body()) {
 		receivingVb = opOn;
@@ -228,6 +260,15 @@ void Adapter::Xaction::start() {
 	// unknown length may have performance implications for the host
 	adapted->header().removeAny(libecap::headerContentLength);
 
+    if(adapted->header().hasAny(headerContentEncoding)) {
+        const char* encoding = adapted->header().value(headerContentEncoding).toString().c_str();
+        fprintf(adaptationLog, "HEADERS: Has content-conding: %s\n", encoding);
+        char filename[128];
+        memset(filename, 0, sizeof(filename));
+        sprintf(filename, "/tmp/%d.gz", counter++);
+        initFile(filename);
+    }
+
 	// add a custom header
 	static const libecap::Name name("X-Ecap");
 	const libecap::Header::Value value =
@@ -245,6 +286,8 @@ void Adapter::Xaction::start() {
 void Adapter::Xaction::stop() {
 	hostx = 0;
 	// the caller will delete
+    endFile();
+    endLog();
 }
 
 void Adapter::Xaction::abDiscard()
@@ -308,11 +351,9 @@ void Adapter::Xaction::noteVbContentAvailable()
 
 	const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
 	std::string chunk = vb.toString(); // expensive, but simple
-    FILE* f = fopen("/tmp/chunks.log", "a+");
-    fprintf(f, "CHUNK (%d): >>\n %s \n<<\n", chunk.length(), chunk.c_str());
-    fclose(f);
+    fprintf(adaptationLog, "CHUNK (%d): >>\n %s \n<<\n", chunk.length(), chunk.c_str());
+    writeFile(chunk.c_str(), sizeof(char), chunk.length());
 	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
-	adaptContent(chunk);
 	buffer += chunk; // buffer what we got
 
 	if (sendingAb == opOn)
