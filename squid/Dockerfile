@@ -1,5 +1,8 @@
 FROM ubuntu
 
+ENV TZ=Etc/UTC
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
 RUN apt update -y
 RUN apt install -y  wget gcc g++ automake autoconf libtool openssl libssl-dev libcppunit-dev make pkg-config
 
