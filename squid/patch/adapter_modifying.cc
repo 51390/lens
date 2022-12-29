@@ -247,7 +247,8 @@ void Adapter::Xaction::visitEachOption(libecap::NamedValueVisitor &) const {
 int counter = 0;
 
 void Adapter::Xaction::start() {
-    initLog();
+    //initLog();
+    std::clog << "Action start" << std::endl;
 	Must(hostx);
 	if (hostx->virgin().body()) {
 		receivingVb = opOn;
@@ -266,13 +267,13 @@ void Adapter::Xaction::start() {
 	// unknown length may have performance implications for the host
 	adapted->header().removeAny(libecap::headerContentLength);
 
-    if(adapted->header().hasAny(headerContentEncoding)) {
+    if(0 && adapted->header().hasAny(headerContentEncoding)) {
         const char* encoding = adapted->header().value(headerContentEncoding).toString().c_str();
         fprintf(adaptationLog, "HEADERS: Has content-conding: %s\n", encoding);
         char filename[128];
         memset(filename, 0, sizeof(filename));
         sprintf(filename, "/tmp/%d.gz", counter++);
-        initFile(filename);
+        //initFile(filename);
     }
 
 	// add a custom header
@@ -291,9 +292,10 @@ void Adapter::Xaction::start() {
 
 void Adapter::Xaction::stop() {
 	hostx = 0;
+    std::clog << "Action stop" << std::endl;
 	// the caller will delete
-    endFile();
-    endLog();
+    //endFile();
+    //endLog();
 }
 
 void Adapter::Xaction::abDiscard()
@@ -357,8 +359,8 @@ void Adapter::Xaction::noteVbContentAvailable()
 
 	const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
 	std::string chunk = vb.toString(); // expensive, but simple
-    fprintf(adaptationLog, "CHUNK (%ld): >>\n %s \n<<\n", chunk.length(), chunk.c_str());
-    writeFile(chunk.c_str(), sizeof(char), chunk.length());
+    //fprintf(adaptationLog, "CHUNK (%ld): >>\n %s \n<<\n", chunk.length(), chunk.c_str());
+    //writeFile(chunk.c_str(), sizeof(char), chunk.length());
 	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
 	buffer += chunk; // buffer what we got
 
