@@ -40,7 +40,7 @@ RUN tar xvfpz ecap_adapter_sample-1.0.0.tar.gz
 WORKDIR ecap_adapter_sample-1.0.0
 COPY ./patch/adapter_async.cc src/adapter_async.cc
 COPY ./patch/adapter_modifying.cc src/adapter_modifying.cc
-RUN ./configure && make && make install
+RUN CXXFLAGS=-DHAVE_PTHREAD ./configure && make && make install
 RUN ldconfig
 
 WORKDIR $INSTALL_PATH
@@ -49,7 +49,7 @@ WORKDIR $INSTALL_PATH
 ADD conf/* /squid/etc/
 RUN chmod 400 /squid/etc/bump*
 RUN /squid/libexec/security_file_certgen -c -s /squid/var/cache/squid/ssl_db -M 20MB
-RUN chmod a+w -R /squid/var/logs 
+RUN chmod a+w -R /squid/
 
 ADD bin/entrypoint.sh /squid/bin/entrypoint.sh
 
