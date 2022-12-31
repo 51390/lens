@@ -1,5 +1,7 @@
 #include "sample.h"
 #include "Debug.h"
+#include <cstdio>
+#include <cstring>
 #include <libecap/common/registry.h>
 #include <libecap/common/errors.h>
 #include <libecap/adapter/service.h>
@@ -24,6 +26,8 @@
 
 
 namespace Adapter { // not required, but adds clarity
+
+int counter = 0;
 
 class Xaction;
 typedef libecap::shared_ptr<Xaction> XactionPointer;
@@ -93,8 +97,8 @@ class Xaction: public libecap::adapter::Xaction {
 		virtual void abContentShift(libecap::size_type) { noBodySupport(); }
 
 		// virgin body state notification
-		virtual void noteVbContentDone(bool) { noBodySupport(); }
-		virtual void noteVbContentAvailable() { noBodySupport(); }
+		virtual void noteVbContentDone(bool);
+		virtual void noteVbContentAvailable();
 
 		// perform (well, simulate) content adaptation
 		void analyze();
@@ -103,6 +107,8 @@ class Xaction: public libecap::adapter::Xaction {
 		void tellHostToResume();
 
 		XactionPointer self;
+
+        int id = 0;
 
 	protected:
 		void noBodySupport() const;
@@ -220,6 +226,7 @@ void Adapter::Service::Resume(const XactionPointer &x) {
 /* Xaction */
 
 Adapter::Xaction::Xaction(libecap::host::Xaction *x): hostx(x) {
+    id = counter++;
 }
 
 Adapter::Xaction::~Xaction() {
@@ -248,9 +255,7 @@ void Adapter::Xaction::analyze() {
 	++Service::WorkingXactions_;
 	static int count = 0;
 	const int delay = (++count % 4); // 0-3 seconds
-	std::clog << "adapter_async[" << this << "] starts " << delay << "s analysis" << std::endl;
-	sleep(delay); // simulate slow analysis
-	std::clog << "adapter_async[" << this << "] ends   " << delay << "s analysis" << std::endl;
+	Debug(flApplication|ilNormal) << "adapter_async[" << this << "] analysis ";
 	Service::Resume(self);
 	self.reset(); // XXX: may not happen if thread is canceled
 	--Service::WorkingXactions_; // XXX: may not happen if thread is canceled
@@ -259,7 +264,7 @@ void Adapter::Xaction::analyze() {
 void Adapter::Xaction::start() {
 	Must(hostx);
 #if HAVE_PTHREAD
-	Must(pthread_create(&thread_, 0, &Analyze, this) == 0);
+	//Must(pthread_create(&thread_, 0, &Analyze, this) == 0);
 #else
 #warning No pthread support detected. The adapter_async sample will not work as intended.
 	Analyze(this);
@@ -269,10 +274,6 @@ void Adapter::Xaction::start() {
 void Adapter::Xaction::resume() {
 	assert(hostx);
 	// make this adapter non-callable
-	libecap::host::Xaction *x = hostx;
-	hostx = 0;
-	// tell the host to use the virgin message
-	x->useVirgin();
 }
 
 void Adapter::Xaction::stop() {
@@ -289,6 +290,55 @@ void Adapter::Xaction::stop() {
 void Adapter::Xaction::noBodySupport() const {
 	Must(!"must not be called: async adapter offers no body support");
 	// not reached
+}
+
+void Adapter::Xaction::noteVbContentDone(bool atEnd)
+{
+    hostx->vbStopMaking();
+}
+
+
+typedef struct {
+    char* payload;
+    size_t n;
+    int id;
+#if HAVE_PTHREAD
+    pthread_t thread_; // pthread handler
+#endif
+} Data;
+
+extern "C"
+void* extract(void* arg)
+{
+    Data* data = (Data*)arg;
+    char filename[128];
+    memset(filename, 0, sizeof(filename));
+    sprintf(filename, "/tmp/response-%d.dump", data->id);
+
+    FILE* f = fopen(filename, "a+");
+    fwrite(data->payload, data->n, sizeof(char), f);
+    fclose(f);
+
+    //delete data->payload;
+    //delete data;
+
+    pthread_exit(0);
+    return 0;
+}
+
+void Adapter::Xaction::noteVbContentAvailable()
+{
+    const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
+    Data* d = new Data();
+    d->n = vb.size;
+    d->payload = new char(d->n);
+    d->id = id;
+    memcpy(d->payload, vb.start, d->n * sizeof(char));
+    hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
+    
+#if HAVE_PTHREAD
+	Must(pthread_create(&d->thread_, 0, &extract, d) == 0);
+#endif
 }
 
 void Adapter::Xaction::tellHostToResume() {
