@@ -164,15 +164,41 @@ void Adapter::Service::retire() {
 }
 
 bool Adapter::Service::wantsUrl(const char *url) const {
-	return false; // async adapter is applied to all messages
+	return true; // async adapter is applied to all messages
 }
 
 void Adapter::Service::suspend(timeval &timeout) {
-    libecap::adapter::Service::suspend(timeout);
+
+	// Do not delay waiting transactions more than necessary.
+	if (!WaitingXactions_.empty()) {
+		timeout.tv_sec = 0;
+		timeout.tv_usec = 0;
+		return;
+	}
+
+	// Do not ignore working transactions for too long:
+	// In most cases, the adapter does not know when the async analysis will
+	// be over, so using a constant maximum delay such as 300ms is acceptible.
+	if (WorkingXactions_) {
+		const int maxUsec = 300*1000;
+		if (timeout.tv_sec > 0 || timeout.tv_usec > maxUsec) {
+			timeout.tv_sec = 0;
+			timeout.tv_usec = maxUsec;
+		}
+		return;
+	}
+
+	// otherwise, the host sleep as much as it (or other services) want,
+	// preventing "hot idle" state
 }
 
 void Adapter::Service::resume() {
-    libecap::adapter::Service::resume();
+
+	while (!WaitingXactions_.empty()) {
+		XactionPointer x = WaitingXactions_.front();
+		WaitingXactions_.pop_front();
+		x->tellHostToResume();
+	}
 }
 
 Adapter::Service::MadeXactionPointer
@@ -183,6 +209,11 @@ Adapter::Service::makeXaction(libecap::host::Xaction *hostx) {
 }
 
 void Adapter::Service::Resume(const XactionPointer &x) {
+	assert(WorkingXactions_);
+	// We are running inside the transaction thread so we cannot call the host
+	// application now. We must wait for the host to call our Service::resume.
+	// XXX: push_back creates a copy of x, which is not thread-safe
+	WaitingXactions_.push_back(x);
 }
 
 
@@ -206,18 +237,49 @@ void Adapter::Xaction::visitEachOption(libecap::NamedValueVisitor &) const {
 	// this transaction has no meta-information to pass to the visitor
 }
 
+extern "C"
+void *Analyze(void *arg) {
+	static_cast<Adapter::Xaction*>(arg)->analyze();
+	return 0;
+}
+
 // This method runs inside a non-host thread. Must not call host here.
 void Adapter::Xaction::analyze() {
+	++Service::WorkingXactions_;
+	static int count = 0;
+	const int delay = (++count % 4); // 0-3 seconds
+	std::clog << "adapter_async[" << this << "] starts " << delay << "s analysis" << std::endl;
+	sleep(delay); // simulate slow analysis
+	std::clog << "adapter_async[" << this << "] ends   " << delay << "s analysis" << std::endl;
+	Service::Resume(self);
+	self.reset(); // XXX: may not happen if thread is canceled
+	--Service::WorkingXactions_; // XXX: may not happen if thread is canceled
 }
 
 void Adapter::Xaction::start() {
 	Must(hostx);
+#if HAVE_PTHREAD
+	Must(pthread_create(&thread_, 0, &Analyze, this) == 0);
+#else
+#warning No pthread support detected. The adapter_async sample will not work as intended.
+	Analyze(this);
+#endif
 }
 
 void Adapter::Xaction::resume() {
+	assert(hostx);
+	// make this adapter non-callable
+	libecap::host::Xaction *x = hostx;
+	hostx = 0;
+	// tell the host to use the virgin message
+	x->useVirgin();
 }
 
 void Adapter::Xaction::stop() {
+#if HAVE_PTHREAD
+	if (hostx)
+		pthread_cancel(thread_);
+#endif
 
 	hostx = 0;
 	// the caller will delete
