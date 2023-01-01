@@ -11,6 +11,7 @@
 #include <libecap/adapter/service.h>
 #include <libecap/adapter/xaction.h>
 #include <libecap/host/xaction.h>
+#include <pthread.h>
 
 namespace Adapter { // not required, but adds clarity
 
@@ -28,6 +29,32 @@ void initLog() {
 void endLog() {
     fprintf(adaptationLog, "STOP\n");
     fclose(adaptationLog);
+}
+
+typedef struct {
+    int counter;
+    void* data;
+    size_t n;
+    pthread_t thread;
+    char* uri;
+} LogOutput;
+
+extern "C"
+void* writeLog(void *output) {
+    LogOutput* lo = (LogOutput*)output;
+
+    char filename[8192];
+    memset(filename, 0, sizeof(filename));
+    sprintf(filename, "/tmp/request-%d.log", lo->counter);
+
+    FILE* stream = fopen(filename, "a+");
+
+    if(stream) {
+        fwrite(lo->data, sizeof(char), lo->n, stream);
+        fclose(stream);
+    }
+
+    return 0;
 }
 
 
@@ -112,31 +139,15 @@ class Xaction: public libecap::adapter::Xaction {
 		libecap::shared_ptr<const Service> service; // configuration access
 		libecap::host::Xaction *hostx; // Host transaction rep
         
-        void initFile(const char*);
-        void endFile();
-        void writeFile(const void* stuff, size_t stuffSize, size_t howMuchStuff);
-
 		std::string buffer; // for content adaptation
         FILE* chunkFile = 0;
+        int id = 0;
+        std::string requested_uri;
 
 		typedef enum { opUndecided, opOn, opComplete, opNever } OperationState;
 		OperationState receivingVb;
 		OperationState sendingAb;
 };
-
-void Adapter::Xaction::initFile(const char* name) {
-    chunkFile = fopen(name, "a+");
-}
-
-void Adapter::Xaction::writeFile(const void* stuff, size_t stuffSize, size_t howMuchStuff) {
-    if(chunkFile) {
-        fwrite(stuff, stuffSize, howMuchStuff, chunkFile);
-    }
-}
-
-void Adapter::Xaction::endFile() {
-    fclose(chunkFile);
-}
 
 static const std::string CfgErrorPrefix =
 	"Modifying Adapter: configuration error: ";
@@ -221,12 +232,14 @@ Adapter::Service::makeXaction(libecap::host::Xaction *hostx) {
 		new Adapter::Xaction(std::tr1::static_pointer_cast<Service>(self), hostx));
 }
 
+int counter = 0;
 
 Adapter::Xaction::Xaction(libecap::shared_ptr<Service> aService,
 	libecap::host::Xaction *x):
 	service(aService),
 	hostx(x),
 	receivingVb(opUndecided), sendingAb(opUndecided) {
+    id = counter++;
 }
 
 Adapter::Xaction::~Xaction() {
@@ -244,11 +257,8 @@ void Adapter::Xaction::visitEachOption(libecap::NamedValueVisitor &) const {
 	// this transaction has no meta-information to pass to the visitor
 }
 
-int counter = 0;
 
 void Adapter::Xaction::start() {
-    //initLog();
-    std::clog << "Action start" << std::endl;
 	Must(hostx);
 	if (hostx->virgin().body()) {
 		receivingVb = opOn;
@@ -266,15 +276,6 @@ void Adapter::Xaction::start() {
 	// delete ContentLength header because we may change the length
 	// unknown length may have performance implications for the host
 	adapted->header().removeAny(libecap::headerContentLength);
-
-    if(0 && adapted->header().hasAny(headerContentEncoding)) {
-        const char* encoding = adapted->header().value(headerContentEncoding).toString().c_str();
-        fprintf(adaptationLog, "HEADERS: Has content-conding: %s\n", encoding);
-        char filename[128];
-        memset(filename, 0, sizeof(filename));
-        sprintf(filename, "/tmp/%d.gz", counter++);
-        //initFile(filename);
-    }
 
 	// add a custom header
 	static const libecap::Name name("X-Ecap");
@@ -358,6 +359,20 @@ void Adapter::Xaction::noteVbContentAvailable()
 	Must(receivingVb == opOn);
 
 	const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
+    LogOutput* lo = new LogOutput();
+    lo->data = malloc(vb.size);
+    lo->n = vb.size;
+    memcpy(lo->data, vb.start, lo->n);
+    lo->counter = id;
+
+    const libecap::Message& cause = hostx->cause();
+    const libecap::RequestLine& rl = dynamic_cast<const libecap::RequestLine&>(cause.firstLine());
+    const libecap::Area uri = rl.uri();
+    lo->uri = (char*)malloc(uri.size + 1);
+    memset(lo->uri, 0, uri.size + 1);
+    memcpy(lo->uri, uri.start, uri.size);
+    pthread_create(&lo->thread, 0, &writeLog, lo);
+
 	std::string chunk = vb.toString(); // expensive, but simple
     //fprintf(adaptationLog, "CHUNK (%ld): >>\n %s \n<<\n", chunk.length(), chunk.c_str());
     //writeFile(chunk.c_str(), sizeof(char), chunk.length());
@@ -380,8 +395,6 @@ void Adapter::Xaction::adaptContent(std::string &chunk) const {
 		chunk.replace(pos, victim.length(), replacement);
 		pos += replacement.size();
 	}
-
-    printf("adaptContent called.\n");
 }
 
 // tells the host that we are not interested in [more] vb
