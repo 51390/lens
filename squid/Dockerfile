@@ -35,6 +35,7 @@ RUN make install
 ARG PRISM_BUILD_PATH=/tmp/prism
 ADD prism $PRISM_BUILD_PATH
 WORKDIR $PRISM_BUILD_PATH
+RUN bash bootstrap.sh
 RUN ./configure && make && make install
 RUN ldconfig
 
