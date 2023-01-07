@@ -5,4 +5,5 @@ LT_INIT
 AC_PROG_CXX
 AC_CONFIG_FILES([Makefile])
 PKG_CHECK_MODULES(libecap, [libecap >= 1.0 libecap < 1.1])
+PKG_CHECK_MODULES(zlib, [zlib >= 1.2])
 AC_OUTPUT
