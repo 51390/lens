@@ -1,6 +1,6 @@
-#include "sample.h"
 #include <cstring>
 #include <iostream>
+#include <libecap/common/autoconf.h>
 #include <libecap/common/registry.h>
 #include <libecap/common/errors.h>
 #include <libecap/common/message.h>
@@ -18,18 +18,6 @@ namespace Adapter { // not required, but adds clarity
 using libecap::size_type;
 
 libecap::Name headerContentEncoding("Content-Encoding", libecap::Name::NextId());
-
-FILE* adaptationLog;
-
-void initLog() {
-    adaptationLog = fopen("/tmp/adaptation.log", "a+");
-    fprintf(adaptationLog, "START\n");
-}
-
-void endLog() {
-    fprintf(adaptationLog, "STOP\n");
-    fclose(adaptationLog);
-}
 
 typedef struct {
     int counter;

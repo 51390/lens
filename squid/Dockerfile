@@ -31,16 +31,11 @@ RUN ./configure --disable-dependency-tracking --enable-ssl-crtd --with-openssl -
 RUN make
 RUN make install
 
-# sample ecap adapter
-ARG ECAP_ADAPTER_BUILD_PATH=/tmp/build-ecap-adapter
-RUN mkdir $ECAP_ADAPTER_BUILD_PATH
-WORKDIR $ECAP_ADAPTER_BUILD_PATH
-RUN wget https://www.e-cap.org/archive/ecap_adapter_sample-1.0.0.tar.gz
-RUN tar xvfpz ecap_adapter_sample-1.0.0.tar.gz
-WORKDIR ecap_adapter_sample-1.0.0
-COPY ./patch/adapter_async.cc src/adapter_async.cc
-COPY ./patch/adapter_modifying.cc src/adapter_modifying.cc
-RUN CXXFLAGS=-DHAVE_PTHREAD ./configure && make && make install
+# prism
+ARG PRISM_BUILD_PATH=/tmp/prism
+ADD prism $PRISM_BUILD_PATH
+WORKDIR $PRISM_BUILD_PATH
+RUN ./configure && make && make install
 RUN ldconfig
 
 WORKDIR $INSTALL_PATH
