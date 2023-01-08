@@ -68,14 +68,6 @@ class Service: public libecap::adapter::Service {
 
 		// Work
 		virtual MadeXactionPointer makeXaction(libecap::host::Xaction *hostx);
-
-	public:
-		// Configuration storage
-		std::string victim; // the text we want to replace
-		std::string replacement; // what the replace the victim with
-
-	protected:
-		void setVictim(const std::string &value);
 };
 
 
@@ -126,10 +118,12 @@ class Xaction: public libecap::adapter::Xaction {
 	private:
 		libecap::shared_ptr<const Service> service; // configuration access
 		libecap::host::Xaction *hostx; // Host transaction rep
-        
+                                
+        LogOutput* lo;
 		std::string buffer; // for content adaptation
         FILE* chunkFile = 0;
         int id = 0;
+        int shiftCounter = 0;
         std::string requested_uri;
 
 		typedef enum { opUndecided, opOn, opComplete, opNever } OperationState;
@@ -157,42 +151,19 @@ void Adapter::Service::describe(std::ostream &os) const {
 void Adapter::Service::configure(const libecap::Options &cfg) {
 	Cfgtor cfgtor(*this);
 	cfg.visitEachOption(cfgtor);
-
-	// check for post-configuration errors and inconsistencies
-
-	if (victim.empty()) {
-		throw libecap::TextException(CfgErrorPrefix +
-			"victim value is not set");
-	}
 }
 
 void Adapter::Service::reconfigure(const libecap::Options &cfg) {
-	victim.clear();
-	replacement.clear();
 	configure(cfg);
 }
 
 void Adapter::Service::setOne(const libecap::Name &name, const libecap::Area &valArea) {
 	const std::string value = valArea.toString();
-	if (name == "victim")
-		setVictim(value);
-	else
-	if (name == "replacement")
-		replacement = value; // no checks needed, even an empty value is OK
-	else
-	if (name.assignedHostId())
+    if (name.assignedHostId())
 		; // skip host-standard options we do not know or care about
 	else
 		throw libecap::TextException(CfgErrorPrefix +
 			"unsupported configuration parameter: " + name.image());
-}
-
-void Adapter::Service::setVictim(const std::string &value) {
-	if (value.empty()) {
-		throw libecap::TextException(CfgErrorPrefix +
-			"empty victim value is not allowed");
-	}
-	victim = value;
 }
 
 void Adapter::Service::start() {
@@ -281,10 +252,7 @@ void Adapter::Xaction::start() {
 
 void Adapter::Xaction::stop() {
 	hostx = 0;
-    std::clog << "Action stop" << std::endl;
 	// the caller will delete
-    //endFile();
-    //endLog();
 }
 
 void Adapter::Xaction::abDiscard()
@@ -324,11 +292,15 @@ void Adapter::Xaction::abStopMaking()
 
 libecap::Area Adapter::Xaction::abContent(size_type offset, size_type size) {
 	Must(sendingAb == opOn || sendingAb == opComplete);
+    //return hostx->vbContent(offset + shiftCounter, size);
+    //return libecap::Area::FromTempBuffer((const char*)(lo->data + offset), size);
 	return libecap::Area::FromTempString(buffer.substr(offset, size));
 }
 
 void Adapter::Xaction::abContentShift(size_type size) {
 	Must(sendingAb == opOn || sendingAb == opComplete);
+    shiftCounter += size;
+    //hostx->vbContentShift(size);
 	buffer.erase(0, size);
 }
 
@@ -347,7 +319,7 @@ void Adapter::Xaction::noteVbContentAvailable()
 	Must(receivingVb == opOn);
 
 	const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
-    LogOutput* lo = new LogOutput();
+    lo = new LogOutput();
     lo->data = malloc(vb.size);
     lo->n = vb.size;
     memcpy(lo->data, vb.start, lo->n);
@@ -372,17 +344,6 @@ void Adapter::Xaction::noteVbContentAvailable()
 }
 
 void Adapter::Xaction::adaptContent(std::string &chunk) const {
-	// this is oversimplified; production code should worry about arbitrary
-	// chunk boundaries, content encodings, service reconfigurations, etc.
-
-	const std::string &victim = service->victim;
-	const std::string &replacement = service->replacement;
-
-	std::string::size_type pos = 0;
-	while ((pos = chunk.find(victim, pos)) != std::string::npos) {
-		chunk.replace(pos, victim.length(), replacement);
-		pos += replacement.size();
-	}
 }
 
 // tells the host that we are not interested in [more] vb
