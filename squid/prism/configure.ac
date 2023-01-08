@@ -5,5 +5,14 @@ LT_INIT
 AC_PROG_CXX
 AC_CONFIG_FILES([Makefile])
 PKG_CHECK_MODULES(libecap, [libecap >= 1.0 libecap < 1.1])
-PKG_CHECK_MODULES(zlib, [zlib >= 1.2])
+AC_CHECK_HEADER(
+                zlib.h,
+                AC_CHECK_LIB(
+                             z,
+                             [deflate],
+                             ,
+                             AC_MSG_ERROR("libz not found or wrong version")
+                ),
+                AC_MSG_ERROR("zlib.h not found")
+)
 AC_OUTPUT
