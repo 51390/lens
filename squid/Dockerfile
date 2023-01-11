@@ -4,7 +4,7 @@ ENV TZ=Etc/UTC
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 RUN apt update -y --fix-missing
-RUN apt install -y  wget gcc g++ automake autoconf libtool openssl libssl-dev libcppunit-dev make pkg-config vim gdb zstd
+RUN apt install -y  wget gcc g++ automake autoconf libtool openssl libssl-dev libcppunit-dev make pkg-config vim gdb zstd zlib1g-dev
 
 # libecap
 ARG ECAP_BUILD_PATH=/tmp/build-ecap
