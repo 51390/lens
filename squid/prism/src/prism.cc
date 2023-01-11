@@ -217,6 +217,17 @@ Adapter::Xaction::~Xaction() {
 		hostx = 0;
 		x->adaptationAborted();
 	}
+
+    BufferList *sweeper = bufferList;
+
+    while(sweeper) {
+        BufferList* cleaner = sweeper;
+        if(cleaner->size && cleaner->buffer) {
+            free(cleaner->buffer);
+            delete(cleaner);
+        }
+        sweeper = sweeper->next;
+    }
 }
 
 const libecap::Area Adapter::Xaction::option(const libecap::Name &) const {
