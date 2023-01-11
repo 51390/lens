@@ -27,6 +27,13 @@ typedef struct {
     char* uri;
 } LogOutput;
 
+
+typedef struct BufferList_ {
+    void* buffer;
+    size_t size;
+    struct BufferList_* next;
+} BufferList;
+
 extern "C"
 void* writeLog(void *output) {
     LogOutput* lo = (LogOutput*)output;
@@ -120,11 +127,11 @@ class Xaction: public libecap::adapter::Xaction {
 		libecap::host::Xaction *hostx; // Host transaction rep
                                 
         LogOutput* lo;
-		std::string buffer; // for content adaptation
         FILE* chunkFile = 0;
         int id = 0;
-        int shiftCounter = 0;
+        int contentLength = 0;
         std::string requested_uri;
+        BufferList *bufferList, *current, *last = 0;
 
 		typedef enum { opUndecided, opOn, opComplete, opNever } OperationState;
 		OperationState receivingVb;
@@ -167,6 +174,7 @@ void Adapter::Service::setOne(const libecap::Name &name, const libecap::Area &va
 }
 
 void Adapter::Service::start() {
+    std::clog << "Prism starting";
 	libecap::adapter::Service::start();
 	// custom code would go here, but this service does not have one
 }
@@ -199,6 +207,9 @@ Adapter::Xaction::Xaction(libecap::shared_ptr<Service> aService,
 	hostx(x),
 	receivingVb(opUndecided), sendingAb(opUndecided) {
     id = counter++;
+    current = 0;
+    bufferList = 0;
+    last = 0;
 }
 
 Adapter::Xaction::~Xaction() {
@@ -232,9 +243,13 @@ void Adapter::Xaction::start() {
 	libecap::shared_ptr<libecap::Message> adapted = hostx->virgin().clone();
 	Must(adapted != 0);
 
-	// delete ContentLength header because we may change the length
-	// unknown length may have performance implications for the host
-	adapted->header().removeAny(libecap::headerContentLength);
+    if(adapted->header().hasAny(libecap::headerContentLength)) {
+        libecap::Header::Value v = adapted->header().value(libecap::headerContentLength);
+        contentLength = std::stoi(v.toString());
+        // delete ContentLength header because we may change the length
+        // unknown length may have performance implications for the host
+        adapted->header().removeAny(libecap::headerContentLength);
+    }
 
 	// add a custom header
 	static const libecap::Name name("X-Ecap");
@@ -272,8 +287,9 @@ void Adapter::Xaction::abMake()
 	Must(receivingVb == opOn || receivingVb == opComplete);
 	
 	sendingAb = opOn;
-	if (!buffer.empty())
-		hostx->noteAbContentAvailable();
+    if(current) {
+        hostx->noteAbContentAvailable();
+    }
 }
 
 void Adapter::Xaction::abMakeMore()
@@ -292,16 +308,17 @@ void Adapter::Xaction::abStopMaking()
 
 libecap::Area Adapter::Xaction::abContent(size_type offset, size_type size) {
 	Must(sendingAb == opOn || sendingAb == opComplete);
-    //return hostx->vbContent(offset + shiftCounter, size);
-    //return libecap::Area::FromTempBuffer((const char*)(lo->data + offset), size);
-	return libecap::Area::FromTempString(buffer.substr(offset, size));
+    BufferList* c =  current;
+    if(c) {
+        current = c->next;
+        return c->size ? libecap::Area::FromTempBuffer((const char*)c->buffer, c->size) : libecap::Area();
+    } else {
+        return libecap::Area();
+    }
 }
 
 void Adapter::Xaction::abContentShift(size_type size) {
 	Must(sendingAb == opOn || sendingAb == opComplete);
-    shiftCounter += size;
-    //hostx->vbContentShift(size);
-	buffer.erase(0, size);
 }
 
 void Adapter::Xaction::noteVbContentDone(bool atEnd)
@@ -319,10 +336,27 @@ void Adapter::Xaction::noteVbContentAvailable()
 	Must(receivingVb == opOn);
 
 	const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
+    
+    if(!last) {
+        bufferList = new BufferList();
+        last = bufferList;
+    } else {
+        last->next = new BufferList();
+        last = last->next;
+    }
+
+    last->next = 0;
+    last->size = vb.size;
+    last->buffer = malloc(last->size);
+    memcpy(last->buffer, vb.start, last->size);
+
+    if(!current) {
+        current = last;
+    }
+
     lo = new LogOutput();
-    lo->data = malloc(vb.size);
-    lo->n = vb.size;
-    memcpy(lo->data, vb.start, lo->n);
+    lo->data = last->buffer;
+    lo->n = last->size;
     lo->counter = id;
 
     const libecap::Message& cause = hostx->cause();
@@ -333,12 +367,7 @@ void Adapter::Xaction::noteVbContentAvailable()
     memcpy(lo->uri, uri.start, uri.size);
     pthread_create(&lo->thread, 0, &writeLog, lo);
 
-	std::string chunk = vb.toString(); // expensive, but simple
-    //fprintf(adaptationLog, "CHUNK (%ld): >>\n %s \n<<\n", chunk.length(), chunk.c_str());
-    //writeFile(chunk.c_str(), sizeof(char), chunk.length());
 	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
-	buffer += chunk; // buffer what we got
-
 	if (sendingAb == opOn)
 		hostx->noteAbContentAvailable();
 }
