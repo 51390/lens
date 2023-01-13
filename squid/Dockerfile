@@ -1,5 +1,7 @@
 FROM ubuntu
 
+ARG LIBECAP_ARCH_FLAGS
+
 ENV TZ=Etc/UTC
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
@@ -13,7 +15,7 @@ WORKDIR $ECAP_BUILD_PATH
 RUN wget https://www.e-cap.org/archive/libecap-1.0.0.tar.gz
 RUN tar xvpfz libecap-1.0.0.tar.gz
 WORKDIR $ECAP_BUILD_PATH/libecap-1.0.0
-RUN ./configure && make && make install
+RUN ./configure ${LIBECAP_ARCH_FLAGS} && make && make install
 RUN ldconfig
 
 # squid, proper
@@ -27,7 +29,7 @@ RUN tar xvpfz squid-5.7.tar.gz
 WORKDIR $BUILD_PATH/squid-5.7
 
 RUN bash bootstrap.sh
-RUN ./configure --disable-dependency-tracking --enable-ssl-crtd --with-openssl --disable-strict-error-checking --enable-ecap --prefix=$INSTALL_PATH
+RUN ./configure --disable-dependency-tracking --enable-ssl-crtd --with-openssl --disable-strict-error-checking --enable-ecap --prefix=$INSTALL_PATH --build=aarch64-unknown-linux-gnu
 RUN make
 RUN make install
 
