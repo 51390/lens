@@ -1,6 +1,6 @@
-#include "sample.h"
 #include <cstring>
 #include <iostream>
+#include <libecap/common/autoconf.h>
 #include <libecap/common/registry.h>
 #include <libecap/common/errors.h>
 #include <libecap/common/message.h>
@@ -11,6 +11,7 @@
 #include <libecap/adapter/service.h>
 #include <libecap/adapter/xaction.h>
 #include <libecap/host/xaction.h>
+#include <pthread.h>
 
 namespace Adapter { // not required, but adds clarity
 
@@ -18,31 +19,39 @@ using libecap::size_type;
 
 libecap::Name headerContentEncoding("Content-Encoding", libecap::Name::NextId());
 
-FILE* adaptationLog;
-FILE* chunkFile = 0;
+typedef struct {
+    int counter;
+    void* data;
+    size_t n;
+    pthread_t thread;
+    char* uri;
+} LogOutput;
 
-void initLog() {
-    adaptationLog = fopen("/tmp/adaptation.log", "a+");
-    fprintf(adaptationLog, "START\n");
-}
 
-void endLog() {
-    fprintf(adaptationLog, "STOP\n");
-    fclose(adaptationLog);
-}
-void initFile(const char* name) {
-    chunkFile = fopen(name, "a+");
-}
+typedef struct BufferList_ {
+    void* buffer;
+    size_t size;
+    struct BufferList_* next;
+} BufferList;
 
-void writeFile(const void* stuff, size_t stuffSize, size_t howMuchStuff) {
-    if(chunkFile) {
-        fwrite(stuff, stuffSize, howMuchStuff, chunkFile);
+extern "C"
+void* writeLog(void *output) {
+    LogOutput* lo = (LogOutput*)output;
+
+    char filename[8192];
+    memset(filename, 0, sizeof(filename));
+    sprintf(filename, "/tmp/request-%d.log", lo->counter);
+
+    FILE* stream = fopen(filename, "a+");
+
+    if(stream) {
+        fwrite(lo->data, sizeof(char), lo->n, stream);
+        fclose(stream);
     }
+
+    return 0;
 }
 
-void endFile() {
-    fclose(chunkFile);
-}
 
 class Service: public libecap::adapter::Service {
 	public:
@@ -66,14 +75,6 @@ class Service: public libecap::adapter::Service {
 
 		// Work
 		virtual MadeXactionPointer makeXaction(libecap::host::Xaction *hostx);
-
-	public:
-		// Configuration storage
-		std::string victim; // the text we want to replace
-		std::string replacement; // what the replace the victim with
-
-	protected:
-		void setVictim(const std::string &value);
 };
 
 
@@ -124,8 +125,13 @@ class Xaction: public libecap::adapter::Xaction {
 	private:
 		libecap::shared_ptr<const Service> service; // configuration access
 		libecap::host::Xaction *hostx; // Host transaction rep
-
-		std::string buffer; // for content adaptation
+                                
+        LogOutput* lo;
+        FILE* chunkFile = 0;
+        int id = 0;
+        int contentLength = 0;
+        std::string requested_uri;
+        BufferList *bufferList, *current, *last = 0;
 
 		typedef enum { opUndecided, opOn, opComplete, opNever } OperationState;
 		OperationState receivingVb;
@@ -152,45 +158,23 @@ void Adapter::Service::describe(std::ostream &os) const {
 void Adapter::Service::configure(const libecap::Options &cfg) {
 	Cfgtor cfgtor(*this);
 	cfg.visitEachOption(cfgtor);
-
-	// check for post-configuration errors and inconsistencies
-
-	if (victim.empty()) {
-		throw libecap::TextException(CfgErrorPrefix +
-			"victim value is not set");
-	}
 }
 
 void Adapter::Service::reconfigure(const libecap::Options &cfg) {
-	victim.clear();
-	replacement.clear();
 	configure(cfg);
 }
 
 void Adapter::Service::setOne(const libecap::Name &name, const libecap::Area &valArea) {
 	const std::string value = valArea.toString();
-	if (name == "victim")
-		setVictim(value);
-	else
-	if (name == "replacement")
-		replacement = value; // no checks needed, even an empty value is OK
-	else
-	if (name.assignedHostId())
+    if (name.assignedHostId())
 		; // skip host-standard options we do not know or care about
 	else
 		throw libecap::TextException(CfgErrorPrefix +
 			"unsupported configuration parameter: " + name.image());
 }
 
-void Adapter::Service::setVictim(const std::string &value) {
-	if (value.empty()) {
-		throw libecap::TextException(CfgErrorPrefix +
-			"empty victim value is not allowed");
-	}
-	victim = value;
-}
-
 void Adapter::Service::start() {
+    std::clog << "Prism starting";
 	libecap::adapter::Service::start();
 	// custom code would go here, but this service does not have one
 }
@@ -215,12 +199,17 @@ Adapter::Service::makeXaction(libecap::host::Xaction *hostx) {
 		new Adapter::Xaction(std::tr1::static_pointer_cast<Service>(self), hostx));
 }
 
+int counter = 0;
 
 Adapter::Xaction::Xaction(libecap::shared_ptr<Service> aService,
 	libecap::host::Xaction *x):
 	service(aService),
 	hostx(x),
 	receivingVb(opUndecided), sendingAb(opUndecided) {
+    id = counter++;
+    current = 0;
+    bufferList = 0;
+    last = 0;
 }
 
 Adapter::Xaction::~Xaction() {
@@ -228,6 +217,19 @@ Adapter::Xaction::~Xaction() {
 		hostx = 0;
 		x->adaptationAborted();
 	}
+
+    BufferList *sweeper = bufferList;
+
+    while(sweeper) {
+        BufferList* cleaner = sweeper;
+        if(cleaner->size && cleaner->buffer) {
+#ifndef PRISM_IN_PLACE
+            free(cleaner->buffer);
+#endif
+            delete(cleaner);
+        }
+        sweeper = sweeper->next;
+    }
 }
 
 const libecap::Area Adapter::Xaction::option(const libecap::Name &) const {
@@ -238,10 +240,8 @@ void Adapter::Xaction::visitEachOption(libecap::NamedValueVisitor &) const {
 	// this transaction has no meta-information to pass to the visitor
 }
 
-int counter = 0;
 
 void Adapter::Xaction::start() {
-    initLog();
 	Must(hostx);
 	if (hostx->virgin().body()) {
 		receivingVb = opOn;
@@ -256,17 +256,12 @@ void Adapter::Xaction::start() {
 	libecap::shared_ptr<libecap::Message> adapted = hostx->virgin().clone();
 	Must(adapted != 0);
 
-	// delete ContentLength header because we may change the length
-	// unknown length may have performance implications for the host
-	adapted->header().removeAny(libecap::headerContentLength);
-
-    if(adapted->header().hasAny(headerContentEncoding)) {
-        const char* encoding = adapted->header().value(headerContentEncoding).toString().c_str();
-        fprintf(adaptationLog, "HEADERS: Has content-conding: %s\n", encoding);
-        char filename[128];
-        memset(filename, 0, sizeof(filename));
-        sprintf(filename, "/tmp/%d.gz", counter++);
-        initFile(filename);
+    if(adapted->header().hasAny(libecap::headerContentLength)) {
+        libecap::Header::Value v = adapted->header().value(libecap::headerContentLength);
+        contentLength = std::stoi(v.toString());
+        // delete ContentLength header because we may change the length
+        // unknown length may have performance implications for the host
+        adapted->header().removeAny(libecap::headerContentLength);
     }
 
 	// add a custom header
@@ -286,8 +281,6 @@ void Adapter::Xaction::start() {
 void Adapter::Xaction::stop() {
 	hostx = 0;
 	// the caller will delete
-    endFile();
-    endLog();
 }
 
 void Adapter::Xaction::abDiscard()
@@ -307,8 +300,9 @@ void Adapter::Xaction::abMake()
 	Must(receivingVb == opOn || receivingVb == opComplete);
 	
 	sendingAb = opOn;
-	if (!buffer.empty())
-		hostx->noteAbContentAvailable();
+    if(current) {
+        hostx->noteAbContentAvailable();
+    }
 }
 
 void Adapter::Xaction::abMakeMore()
@@ -327,12 +321,17 @@ void Adapter::Xaction::abStopMaking()
 
 libecap::Area Adapter::Xaction::abContent(size_type offset, size_type size) {
 	Must(sendingAb == opOn || sendingAb == opComplete);
-	return libecap::Area::FromTempString(buffer.substr(offset, size));
+    BufferList* c =  current;
+    if(c) {
+        current = c->next;
+        return c->size ? libecap::Area::FromTempBuffer((const char*)c->buffer, c->size) : libecap::Area();
+    } else {
+        return libecap::Area();
+    }
 }
 
 void Adapter::Xaction::abContentShift(size_type size) {
 	Must(sendingAb == opOn || sendingAb == opComplete);
-	buffer.erase(0, size);
 }
 
 void Adapter::Xaction::noteVbContentDone(bool atEnd)
@@ -350,30 +349,47 @@ void Adapter::Xaction::noteVbContentAvailable()
 	Must(receivingVb == opOn);
 
 	const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
-	std::string chunk = vb.toString(); // expensive, but simple
-    fprintf(adaptationLog, "CHUNK (%d): >>\n %s \n<<\n", chunk.length(), chunk.c_str());
-    writeFile(chunk.c_str(), sizeof(char), chunk.length());
-	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
-	buffer += chunk; // buffer what we got
+    
+    if(!last) {
+        bufferList = new BufferList();
+        last = bufferList;
+    } else {
+        last->next = new BufferList();
+        last = last->next;
+    }
 
+    last->next = 0;
+    last->size = vb.size;
+#ifndef PRISM_IN_PLACE
+    last->buffer = malloc(last->size);
+    memcpy(last->buffer, vb.start, last->size);
+#else
+    last->buffer = (void*)vb.start;
+#endif
+
+    if(!current) {
+        current = last;
+    }
+
+    lo = new LogOutput();
+    lo->data = last->buffer;
+    lo->n = last->size;
+    lo->counter = id;
+
+    const libecap::Message& cause = hostx->cause();
+    const libecap::RequestLine& rl = dynamic_cast<const libecap::RequestLine&>(cause.firstLine());
+    const libecap::Area uri = rl.uri();
+    lo->uri = (char*)malloc(uri.size + 1);
+    memset(lo->uri, 0, uri.size + 1);
+    memcpy(lo->uri, uri.start, uri.size);
+    pthread_create(&lo->thread, 0, &writeLog, lo);
+
+	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
 	if (sendingAb == opOn)
 		hostx->noteAbContentAvailable();
 }
 
 void Adapter::Xaction::adaptContent(std::string &chunk) const {
-	// this is oversimplified; production code should worry about arbitrary
-	// chunk boundaries, content encodings, service reconfigurations, etc.
-
-	const std::string &victim = service->victim;
-	const std::string &replacement = service->replacement;
-
-	std::string::size_type pos = 0;
-	while ((pos = chunk.find(victim, pos)) != std::string::npos) {
-		chunk.replace(pos, victim.length(), replacement);
-		pos += replacement.size();
-	}
-
-    printf("adaptContent called.\n");
 }
 
 // tells the host that we are not interested in [more] vb

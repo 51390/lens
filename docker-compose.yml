@@ -2,8 +2,11 @@ version: "3.9"
 
 services:
   proxy:
-    platform: linux/amd64
     build:
       context: ./squid
+    volumes:
+    - type: bind
+      source: ${BIND_SOURCE:-/tmp}
+      target: /tmp/coredump/
     ports:
       - 3128:3128
