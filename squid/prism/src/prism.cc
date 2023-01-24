@@ -144,7 +144,7 @@ static const std::string CfgErrorPrefix =
 } // namespace Adapter
 
 std::string Adapter::Service::uri() const {
-	return "ecap://e-cap.org/ecap/services/sample/modifying";
+	return "ecap://e-cap.org/ecap/services/51390/prism";
 }
 
 std::string Adapter::Service::tag() const {
