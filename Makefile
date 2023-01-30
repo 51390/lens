@@ -2,11 +2,11 @@
 
 PLATFORM:=$(shell uname)
 BIND_SOURCE:=$(shell test $(PLATFORM) = 'Darwin' && echo /tmp || echo /var/lib/systemd/coredump/)
-LIBECAP_ARCH_FLAGS=$(shell test $(PLATFORM) = 'Darwin' && echo '--build=aarch64-unknown-linux-gnu')
+ARCH_FLAGS=$(shell test $(PLATFORM) = 'Darwin' && echo '--build=aarch64-unknown-linux-gnu')
 
 build:
 	BIND_SOURCE=$(BIND_SOURCE) \
-	docker compose build --build-arg LIBECAP_ARCH_FLAGS=$(LIBECAP_ARCH_FLAGS)
+	docker compose build --build-arg ARCH_FLAGS=$(ARCH_FLAGS)
 
 start:
 	BIND_SOURCE=$(BIND_SOURCE) docker compose up
