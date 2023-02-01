@@ -1,4 +1,5 @@
 #include <cstring>
+#include <dlfcn.h>
 #include <iostream>
 #include <libecap/common/autoconf.h>
 #include <libecap/common/registry.h>
@@ -55,6 +56,7 @@ void* writeLog(void *output) {
 
 class Service: public libecap::adapter::Service {
 	public:
+        Service();
 		// About
 		virtual std::string uri() const; // unique across all vendors
 		virtual std::string tag() const; // changes with version and config
@@ -75,6 +77,9 @@ class Service: public libecap::adapter::Service {
 
 		// Work
 		virtual MadeXactionPointer makeXaction(libecap::host::Xaction *hostx);
+    private:
+        void * _module;
+        void (*_send)();
 };
 
 
@@ -142,6 +147,16 @@ static const std::string CfgErrorPrefix =
 	"Modifying Adapter: configuration error: ";
 
 } // namespace Adapter
+
+Adapter::Service::Service(): libecap::adapter::Service() {
+    _module = dlopen("/tmp/analyzer/target/debug/libanalyzer.so", RTLD_NOW | RTLD_GLOBAL);
+
+    if(_module) {
+        _send = (void (*)())dlsym(_module, "send");
+    }
+
+    _send();
+}
 
 std::string Adapter::Service::uri() const {
 	return "ecap://e-cap.org/ecap/services/51390/prism";
