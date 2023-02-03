@@ -29,10 +29,10 @@ typedef struct {
 } LogOutput;
 
 
-typedef struct BufferList_ {
+typedef struct _BufferList {
     void* buffer;
     size_t size;
-    struct BufferList_* next;
+    struct _BufferList* next;
 } BufferList;
 
 extern "C"
@@ -77,9 +77,10 @@ class Service: public libecap::adapter::Service {
 
 		// Work
 		virtual MadeXactionPointer makeXaction(libecap::host::Xaction *hostx);
+
+        void (*send)(const void*, size_t);
     private:
         void * _module;
-        void (*_send)();
 };
 
 
@@ -152,10 +153,8 @@ Adapter::Service::Service(): libecap::adapter::Service() {
     _module = dlopen("/tmp/analyzer/target/debug/libanalyzer.so", RTLD_NOW | RTLD_GLOBAL);
 
     if(_module) {
-        _send = (void (*)())dlsym(_module, "send");
+        send = (void (*)(const void*, size_t))dlsym(_module, "send");
     }
-
-    _send();
 }
 
 std::string Adapter::Service::uri() const {
@@ -238,6 +237,7 @@ Adapter::Xaction::~Xaction() {
     while(sweeper) {
         BufferList* cleaner = sweeper;
         if(cleaner->size && cleaner->buffer) {
+            service->send(cleaner->buffer, cleaner->size);
 #ifndef PRISM_IN_PLACE
             free(cleaner->buffer);
 #endif
