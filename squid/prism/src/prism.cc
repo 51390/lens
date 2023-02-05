@@ -397,7 +397,7 @@ void Adapter::Xaction::noteVbContentAvailable()
     lo->uri = (char*)malloc(uri.size + 1);
     memset(lo->uri, 0, uri.size + 1);
     memcpy(lo->uri, uri.start, uri.size);
-    pthread_create(&lo->thread, 0, &writeLog, lo);
+    //pthread_create(&lo->thread, 0, &writeLog, lo);
 
 	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
 	if (sendingAb == opOn)
