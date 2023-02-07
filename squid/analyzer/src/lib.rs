@@ -38,16 +38,23 @@ fn get_buffers() -> &'static mut Buffers {
 pub extern "C" fn send(id: i64, chunk: *const c_void, size: usize) {
     let buffers = get_buffers();
     let ptr = chunk as *const u8;
+    let buffer_size;
     match buffers.transactions.get_mut(&id) {
         Some(buffer) => unsafe {
+            buffer_size = buffer.len();
             buffer.extend(std::slice::from_raw_parts(ptr, size));
             //buffers.transactions.insert(id, buffer);
         },
-        None => drop(buffers.transactions.insert(id, Vec::new())),
+        None => unsafe {
+            let mut buffer = Vec::<u8>::new();
+            buffer_size = buffer.len();
+            buffer.extend(std::slice::from_raw_parts(ptr, size));
+            drop(buffers.transactions.insert(id, buffer));
+        },
     }
 
     let filename = format!("/tmp/request-body-{}.log", id);
     let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
-    let content = unsafe { std::slice::from_raw_parts(ptr, size) };
-    file.expect("Unable to open file.").write_all(content).ok();
+    let content = format!("Got a chunk with size {}. Buffers has a total of {} bytes.\n", size, buffer_size);
+    file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
 }
