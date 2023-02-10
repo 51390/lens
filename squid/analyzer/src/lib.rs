@@ -35,7 +35,7 @@ fn get_buffers() -> &'static mut Buffers {
 }
 
 #[no_mangle]
-pub extern "C" fn send(id: i64, chunk: *const c_void, size: usize) {
+pub extern "C" fn append(id: i64, chunk: *const c_void, size: usize) {
     let buffers = get_buffers();
     let ptr = chunk as *const u8;
     let buffer_size;
@@ -56,5 +56,15 @@ pub extern "C" fn send(id: i64, chunk: *const c_void, size: usize) {
     let filename = format!("/tmp/request-body-{}.log", id);
     let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
     let content = format!("Got a chunk with size {}. Buffers has a total of {} bytes.\n", size, buffer_size);
+    file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
+}
+
+#[no_mangle]
+pub extern "C" fn send(id: i64) {
+    let buffers = get_buffers();
+    buffers.transactions.remove(&id);
+    let filename = format!("/tmp/request-body-{}.log", id);
+    let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
+    let content = "Finished appending, content transfer complete.\n";
     file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
 }

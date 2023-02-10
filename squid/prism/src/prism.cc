@@ -78,7 +78,8 @@ class Service: public libecap::adapter::Service {
 		// Work
 		virtual MadeXactionPointer makeXaction(libecap::host::Xaction *hostx);
 
-        void (*send)(int, const void*, size_t);
+        void (*append)(int, const void*, size_t);
+        void (*send)(int);
     private:
         void * _module;
 };
@@ -153,7 +154,8 @@ Adapter::Service::Service(): libecap::adapter::Service() {
     _module = dlopen("/tmp/analyzer/target/debug/libanalyzer.so", RTLD_NOW | RTLD_GLOBAL);
 
     if(_module) {
-        send = (void (*)(int, const void*, size_t))dlsym(_module, "send");
+        append = (void (*)(int, const void*, size_t))dlsym(_module, "append");
+        send = (void (*)(int))dlsym(_module, "send");
     }
 }
 
@@ -237,7 +239,7 @@ Adapter::Xaction::~Xaction() {
     while(sweeper) {
         BufferList* cleaner = sweeper;
         if(cleaner->size && cleaner->buffer) {
-            service->send(id, cleaner->buffer, cleaner->size);
+            service->append(id, cleaner->buffer, cleaner->size);
 #ifndef PRISM_IN_PLACE
             free(cleaner->buffer);
 #endif
@@ -245,6 +247,7 @@ Adapter::Xaction::~Xaction() {
         }
         sweeper = sweeper->next;
     }
+    service->send(id);
 }
 
 const libecap::Area Adapter::Xaction::option(const libecap::Name &) const {
