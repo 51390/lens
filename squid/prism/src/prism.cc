@@ -78,8 +78,8 @@ class Service: public libecap::adapter::Service {
 		// Work
 		virtual MadeXactionPointer makeXaction(libecap::host::Xaction *hostx);
 
-        void (*append)(int, const void*, size_t);
-        void (*send)(int);
+        void (*transfer)(int, const void*, size_t);
+        void (*commit)(int, const char*);
     private:
         void * _module;
 };
@@ -130,7 +130,10 @@ class Xaction: public libecap::adapter::Xaction {
 		libecap::host::Xaction *lastHostCall(); // clears hostx
 
 	private:
+        void _processBuffers();
+
 		libecap::shared_ptr<const Service> service; // configuration access
+        libecap::shared_ptr<libecap::Message>  adapted;
 		libecap::host::Xaction *hostx; // Host transaction rep
                                 
         LogOutput* lo;
@@ -154,8 +157,8 @@ Adapter::Service::Service(): libecap::adapter::Service() {
     _module = dlopen("/tmp/analyzer/target/debug/libanalyzer.so", RTLD_NOW | RTLD_GLOBAL);
 
     if(_module) {
-        append = (void (*)(int, const void*, size_t))dlsym(_module, "append");
-        send = (void (*)(int))dlsym(_module, "send");
+        transfer = (void (*)(int, const void*, size_t))dlsym(_module, "transfer");
+        commit = (void (*)(int, const char*))dlsym(_module, "commit");
     }
 }
 
@@ -234,20 +237,6 @@ Adapter::Xaction::~Xaction() {
 		x->adaptationAborted();
 	}
 
-    BufferList *sweeper = bufferList;
-
-    while(sweeper) {
-        BufferList* cleaner = sweeper;
-        if(cleaner->size && cleaner->buffer) {
-            service->append(id, cleaner->buffer, cleaner->size);
-#ifndef PRISM_IN_PLACE
-            free(cleaner->buffer);
-#endif
-            delete(cleaner);
-        }
-        sweeper = sweeper->next;
-    }
-    service->send(id);
 }
 
 const libecap::Area Adapter::Xaction::option(const libecap::Name &) const {
@@ -271,7 +260,7 @@ void Adapter::Xaction::start() {
 
 	/* adapt message header */
 
-	libecap::shared_ptr<libecap::Message> adapted = hostx->virgin().clone();
+	adapted = hostx->virgin().clone();
 	Must(adapted != 0);
 
     if(adapted->header().hasAny(libecap::headerContentLength)) {
@@ -299,6 +288,32 @@ void Adapter::Xaction::start() {
 void Adapter::Xaction::stop() {
 	hostx = 0;
 	// the caller will delete
+
+    _processBuffers();
+}
+
+void Adapter::Xaction::_processBuffers() {
+    BufferList *sweeper = bufferList;
+
+    while(sweeper) {
+        BufferList* cleaner = sweeper;
+        if(cleaner->size && cleaner->buffer) {
+            service->transfer(id, cleaner->buffer, cleaner->size);
+#ifndef PRISM_IN_PLACE
+            free(cleaner->buffer);
+#endif
+            delete(cleaner);
+        }
+        sweeper = sweeper->next;
+    }
+
+    if(adapted != 0 && adapted->header().hasAny(Adapter::headerContentEncoding)) {
+        libecap::Header::Value v = adapted->header().value(Adapter::headerContentEncoding);
+        service->commit(id, v.toString().c_str());
+    } else {
+        service->commit(id, "N/A");
+    }
+
 }
 
 void Adapter::Xaction::abDiscard()
