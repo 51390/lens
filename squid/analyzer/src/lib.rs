@@ -75,14 +75,11 @@ fn gzip_decompress(buffer: &[u8]) -> Vec<u8> {
 }
 
 fn process(id: &i64, buffer: &[u8], encoding: &str) {
-    let processed;
-    if encoding == "gzip" {
-        processed = gzip_decompress(buffer);
-    } else if encoding == "br" {
-        processed = brotli_decompress(buffer);
-    } else {
-        processed = buffer.to_vec();
-    }
+    let processed = match encoding {
+        "gzip" => gzip_decompress(buffer),
+        "br" => brotli_decompress(buffer),
+        _ => buffer.to_vec(),
+    };
 
     let filename = format!("/tmp/processed-request-body-{}.log", id);
     let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
