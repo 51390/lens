@@ -60,18 +60,26 @@ fn append(id: i64, chunk: *const c_void, size: usize) -> usize {
     buffer_size
 }
 
-
-fn decompress(buffer: &[u8]) -> Vec<u8> {
-    let mut gz_decoder = GzDecoder::new(buffer);
+fn brotli_decompress(buffer: &[u8]) -> Vec<u8> {
+    let mut decompressor = brotli_decompressor::Decompressor::new(buffer, buffer.len());
     let mut decoded = Vec::new();
-    gz_decoder.read_to_end(&mut decoded);
+    decompressor.read_to_end(&mut decoded);
+    decoded
+}
+
+fn gzip_decompress(buffer: &[u8]) -> Vec<u8> {
+    let mut decoder = GzDecoder::new(buffer);
+    let mut decoded = Vec::new();
+    decoder.read_to_end(&mut decoded);
     decoded
 }
 
 fn process(id: &i64, buffer: &[u8], encoding: &str) {
     let processed;
     if encoding == "gzip" {
-        processed = decompress(buffer);
+        processed = gzip_decompress(buffer);
+    } else if encoding == "br" {
+        processed = brotli_decompress(buffer);
     } else {
         processed = buffer.to_vec();
     }
