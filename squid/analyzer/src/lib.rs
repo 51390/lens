@@ -1,12 +1,14 @@
-use std::fs::OpenOptions;
+use flate2::read::GzDecoder;
 use std::collections::HashMap;
 use std::ffi::{
     c_void,
     c_char,
     CStr
 };
-use std::io::Write;
+use std::fs::OpenOptions;
+use std::io::prelude::*;
 use std::sync::Once;
+use std::thread;
 use std::vec::Vec;
 
 static mut BUFFERS: Option<Buffers> = None;
@@ -47,7 +49,6 @@ fn append(id: i64, chunk: *const c_void, size: usize) -> usize {
         Some(buffer) => unsafe {
             buffer_size = buffer.len();
             buffer.extend(std::slice::from_raw_parts(ptr, size));
-            //buffers.transactions.insert(id, buffer);
         },
         None => unsafe {
             let mut buffer = Vec::<u8>::new();
@@ -57,6 +58,32 @@ fn append(id: i64, chunk: *const c_void, size: usize) -> usize {
         },
     }
     buffer_size
+}
+
+
+fn decompress(buffer: &[u8]) -> Vec<u8> {
+    let mut gz_decoder = GzDecoder::new(buffer);
+    let mut decoded = Vec::new();
+    gz_decoder.read_to_end(&mut decoded);
+    decoded
+}
+
+fn process(id: &i64, buffer: &[u8], encoding: &str) {
+    let processed;
+    if encoding == "gzip" {
+        processed = decompress(buffer);
+    } else {
+        processed = buffer.to_vec();
+    }
+
+    let filename = format!("/tmp/processed-request-body-{}.log", id);
+    let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
+    file.expect("Unable to open file.").write_all(&processed).ok();
+
+    let filename = format!("/tmp/request-body-{}.log", id);
+    let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
+    let content = format!("Finished processing. Content encoding is {}.\n", encoding);
+    file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
 }
 
 #[no_mangle]
@@ -70,15 +97,19 @@ pub extern "C" fn transfer(id: i64, chunk: *const c_void, size: usize) {
 
 #[no_mangle]
 pub extern "C" fn commit(id: i64, content_encoding: *const c_char) {
-    let buffers = get_buffers();
-    let buffer_size = match buffers.transactions.get_mut(&id) {
-        Some(buffer) => unsafe { buffer.len() },
-        None => 0
-    };
-    buffers.transactions.remove(&id);
+    let encoding = unsafe {CStr::from_ptr(content_encoding)}.to_str().unwrap().to_owned();
     let filename = format!("/tmp/request-body-{}.log", id);
     let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
-    let encoding = unsafe {CStr::from_ptr(content_encoding)}.to_str().unwrap();
-    let content = format!("Finished appending, content transfer complete. {} total bytes in buffer.\nContent encoding is {}.\n", buffer_size, encoding);
+    let content = format!("Finished appending, content transfer complete. Content encoding is {}.\n", encoding);
     file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
+
+    let buffers = get_buffers();
+    let buffer_ref = buffers.transactions.remove(&id);
+    match buffer_ref {
+        Some(buffer) => {
+            thread::spawn(move || {process(&id, &buffer, &encoding)});
+        },
+        _ => ()
+    };
+
 }

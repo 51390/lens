@@ -43,12 +43,6 @@ RUN ./configure ${VALGRIND_FLAGS} --disable-dependency-tracking --enable-ssl-crt
 RUN make
 RUN make install
 
-# analyzer
-ARG ANALYZER_BUILD_PATH=/tmp/analyzer
-ADD analyzer $ANALYZER_BUILD_PATH
-WORKDIR $ANALYZER_BUILD_PATH
-RUN make
-
 # prism
 ARG PRISM_BUILD_PATH=/tmp/prism
 ADD prism $PRISM_BUILD_PATH
@@ -58,6 +52,13 @@ RUN ./configure
 RUN make
 RUN make install
 RUN ldconfig
+
+# analyzer
+ARG ANALYZER_BUILD_PATH=/tmp/analyzer
+ADD analyzer $ANALYZER_BUILD_PATH
+WORKDIR $ANALYZER_BUILD_PATH
+RUN make
+
 
 WORKDIR $INSTALL_PATH
 
