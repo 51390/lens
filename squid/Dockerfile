@@ -1,10 +1,14 @@
+# syntax = docker/dockerfile:1.2
+
 FROM ubuntu
 
 ARG ARCH_FLAGS
 ARG VALGRIND
 ARG VALGRIND_FLAGS
+ARG CARGO_HOME=/tmp/cargo/
 
 ENV VALGRIND=${VALGRIND}
+ENV CARGO_HOME=${CARGO_HOME}
 
 # tz
 ENV TZ=Etc/UTC
@@ -16,7 +20,7 @@ RUN apt install -y curl wget gcc g++ automake autoconf libtool openssl libssl-de
 
 # rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
-RUN bash /tmp/rustup.sh -y
+RUN --mount=mode=0777,type=cache,target=${CARGO_HOME},rw bash /tmp/rustup.sh -y
 
 # libecap
 ARG ECAP_BUILD_PATH=/tmp/build-ecap
@@ -54,13 +58,15 @@ RUN make install
 RUN ldconfig
 
 # analyzer
-ARG ANALYZER_BUILD_PATH=/tmp/analyzer
+ARG ANALYZER_BUILD_PATH=/tmp/analyzer/
 ADD analyzer $ANALYZER_BUILD_PATH
 WORKDIR $ANALYZER_BUILD_PATH
-RUN make
-
-
-WORKDIR $INSTALL_PATH
+RUN echo 8
+RUN --mount=mode=0777,type=cache,target=${CARGO_HOME}/registry,sharing=locked,rw ls -alh ${CARGO_HOME}; sleep 10
+RUN --mount=mode=0777,type=cache,target=${CARGO_HOME}/registry,sharing=locked,rw ls -alh ${CARGO_HOME}/registry; sleep 10
+RUN --mount=mode=0777,type=cache,target=${CARGO_HOME}/registry,sharing=locked,rw ls -alh ${CARGO_HOME}; PATH=$PATH:${CARGO_HOME}/bin make build
+RUN --mount=mode=0777,type=cache,target=${CARGO_HOME}/registry,sharing=locked,rw ls -alh ${CARGO_HOME}; sleep 10
+RUN --mount=mode=0777,type=cache,target=${CARGO_HOME}/registry,sharing=locked,rw ls -alh ${CARGO_HOME}/registry; sleep 10
 
 # squid config
 ADD conf/* /squid/etc/
@@ -68,6 +74,6 @@ RUN chmod 400 /squid/etc/bump*
 RUN /squid/libexec/security_file_certgen -c -s /squid/var/cache/squid/ssl_db -M 20MB
 RUN chmod a+w -R /squid/
 
+WORKDIR $INSTALL_PATH
 ADD bin/entrypoint.sh /squid/bin/entrypoint.sh
-
 ENTRYPOINT bash /squid/bin/entrypoint.sh
