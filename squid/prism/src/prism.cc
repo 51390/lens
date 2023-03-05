@@ -80,8 +80,9 @@ class Service: public libecap::adapter::Service {
 
         void (*transfer)(int, const void*, size_t);
         void (*commit)(int, const char*);
+        void (*header)(int, const char*, const char*);
     private:
-        void * _module;
+        void * module_;
 };
 
 
@@ -94,6 +95,18 @@ class Cfgtor: public libecap::NamedValueVisitor {
 			svc.setOne(name, value);
 		}
 		Service &svc;
+};
+
+class HeaderVisitor: public libecap::NamedValueVisitor {
+    public:
+        HeaderVisitor(libecap::shared_ptr<const Service> aSvc, int anId): svc(aSvc), id(anId) {}
+        virtual void visit(const libecap::Name &name, const libecap::Area &value) {
+            svc->header(id, name.image().c_str(), value.start);
+        }
+
+    private:
+        libecap::shared_ptr<const Service> svc;
+        int id;
 };
 
 
@@ -154,11 +167,12 @@ static const std::string CfgErrorPrefix =
 } // namespace Adapter
 
 Adapter::Service::Service(): libecap::adapter::Service() {
-    _module = dlopen("/tmp/analyzer/target/debug/libanalyzer.so", RTLD_NOW | RTLD_GLOBAL);
+    module_ = dlopen("/tmp/analyzer/target/debug/libanalyzer.so", RTLD_NOW | RTLD_GLOBAL);
 
-    if(_module) {
-        transfer = (void (*)(int, const void*, size_t))dlsym(_module, "transfer");
-        commit = (void (*)(int, const char*))dlsym(_module, "commit");
+    if(module_) {
+        transfer = (void (*)(int, const void*, size_t))dlsym(module_, "transfer");
+        commit = (void (*)(int, const char*))dlsym(module_, "commit");
+        header = (void (*)(int, const char*, const char*))dlsym(module_, "header");
     }
 }
 
@@ -307,13 +321,15 @@ void Adapter::Xaction::_processBuffers() {
         sweeper = sweeper->next;
     }
 
+    HeaderVisitor hv(service, id);
+    adapted->header().visitEach(hv);
+
     if(adapted != 0 && adapted->header().hasAny(Adapter::headerContentEncoding)) {
         libecap::Header::Value v = adapted->header().value(Adapter::headerContentEncoding);
-        service->commit(id, v.toString().c_str());
+        service->commit(id, v.start);
     } else {
         service->commit(id, "N/A");
     }
-
 }
 
 void Adapter::Xaction::abDiscard()
