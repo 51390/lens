@@ -1,4 +1,5 @@
 #include <cstring>
+#include <dlfcn.h>
 #include <iostream>
 #include <libecap/common/autoconf.h>
 #include <libecap/common/registry.h>
@@ -28,10 +29,10 @@ typedef struct {
 } LogOutput;
 
 
-typedef struct BufferList_ {
+typedef struct _BufferList {
     void* buffer;
     size_t size;
-    struct BufferList_* next;
+    struct _BufferList* next;
 } BufferList;
 
 extern "C"
@@ -55,6 +56,7 @@ void* writeLog(void *output) {
 
 class Service: public libecap::adapter::Service {
 	public:
+        Service();
 		// About
 		virtual std::string uri() const; // unique across all vendors
 		virtual std::string tag() const; // changes with version and config
@@ -75,6 +77,12 @@ class Service: public libecap::adapter::Service {
 
 		// Work
 		virtual MadeXactionPointer makeXaction(libecap::host::Xaction *hostx);
+
+        void (*transfer)(int, const void*, size_t);
+        void (*commit)(int, const char*);
+        void (*header)(int, const char*, const char*);
+    private:
+        void * module_;
 };
 
 
@@ -87,6 +95,18 @@ class Cfgtor: public libecap::NamedValueVisitor {
 			svc.setOne(name, value);
 		}
 		Service &svc;
+};
+
+class HeaderVisitor: public libecap::NamedValueVisitor {
+    public:
+        HeaderVisitor(libecap::shared_ptr<const Service> aSvc, int anId): svc(aSvc), id(anId) {}
+        virtual void visit(const libecap::Name &name, const libecap::Area &value) {
+            svc->header(id, name.image().c_str(), value.start);
+        }
+
+    private:
+        libecap::shared_ptr<const Service> svc;
+        int id;
 };
 
 
@@ -123,7 +143,10 @@ class Xaction: public libecap::adapter::Xaction {
 		libecap::host::Xaction *lastHostCall(); // clears hostx
 
 	private:
+        void _processBuffers();
+
 		libecap::shared_ptr<const Service> service; // configuration access
+        libecap::shared_ptr<libecap::Message>  adapted;
 		libecap::host::Xaction *hostx; // Host transaction rep
                                 
         LogOutput* lo;
@@ -143,8 +166,18 @@ static const std::string CfgErrorPrefix =
 
 } // namespace Adapter
 
+Adapter::Service::Service(): libecap::adapter::Service() {
+    module_ = dlopen("/tmp/analyzer/target/debug/libanalyzer.so", RTLD_NOW | RTLD_GLOBAL);
+
+    if(module_) {
+        transfer = (void (*)(int, const void*, size_t))dlsym(module_, "transfer");
+        commit = (void (*)(int, const char*))dlsym(module_, "commit");
+        header = (void (*)(int, const char*, const char*))dlsym(module_, "header");
+    }
+}
+
 std::string Adapter::Service::uri() const {
-	return "ecap://e-cap.org/ecap/services/sample/modifying";
+	return "ecap://e-cap.org/ecap/services/51390/prism";
 }
 
 std::string Adapter::Service::tag() const {
@@ -218,18 +251,6 @@ Adapter::Xaction::~Xaction() {
 		x->adaptationAborted();
 	}
 
-    BufferList *sweeper = bufferList;
-
-    while(sweeper) {
-        BufferList* cleaner = sweeper;
-        if(cleaner->size && cleaner->buffer) {
-#ifndef PRISM_IN_PLACE
-            free(cleaner->buffer);
-#endif
-            delete(cleaner);
-        }
-        sweeper = sweeper->next;
-    }
 }
 
 const libecap::Area Adapter::Xaction::option(const libecap::Name &) const {
@@ -253,7 +274,7 @@ void Adapter::Xaction::start() {
 
 	/* adapt message header */
 
-	libecap::shared_ptr<libecap::Message> adapted = hostx->virgin().clone();
+	adapted = hostx->virgin().clone();
 	Must(adapted != 0);
 
     if(adapted->header().hasAny(libecap::headerContentLength)) {
@@ -281,6 +302,34 @@ void Adapter::Xaction::start() {
 void Adapter::Xaction::stop() {
 	hostx = 0;
 	// the caller will delete
+
+    _processBuffers();
+}
+
+void Adapter::Xaction::_processBuffers() {
+    BufferList *sweeper = bufferList;
+
+    while(sweeper) {
+        BufferList* cleaner = sweeper;
+        if(cleaner->size && cleaner->buffer) {
+            service->transfer(id, cleaner->buffer, cleaner->size);
+#ifndef PRISM_IN_PLACE
+            free(cleaner->buffer);
+#endif
+            delete(cleaner);
+        }
+        sweeper = sweeper->next;
+    }
+
+    HeaderVisitor hv(service, id);
+    adapted->header().visitEach(hv);
+
+    if(adapted != 0 && adapted->header().hasAny(Adapter::headerContentEncoding)) {
+        libecap::Header::Value v = adapted->header().value(Adapter::headerContentEncoding);
+        service->commit(id, v.start);
+    } else {
+        service->commit(id, "N/A");
+    }
 }
 
 void Adapter::Xaction::abDiscard()
@@ -382,7 +431,7 @@ void Adapter::Xaction::noteVbContentAvailable()
     lo->uri = (char*)malloc(uri.size + 1);
     memset(lo->uri, 0, uri.size + 1);
     memcpy(lo->uri, uri.start, uri.size);
-    pthread_create(&lo->thread, 0, &writeLog, lo);
+    //pthread_create(&lo->thread, 0, &writeLog, lo);
 
 	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
 	if (sendingAb == opOn)
