@@ -19,12 +19,13 @@ trait Instance {
 }
 
 struct Buffers {
-    transactions: HashMap<i64, Vec<u8>>,
+    responses: HashMap<i64, Vec<u8>>,
+    response_headers: HashMap<i64, HashMap<str, str>>,
 }
 
 impl Instance for Buffers {
     fn new() -> Option<Buffers> {
-        Some(Buffers { transactions: HashMap::new() })
+        Some(Buffers { responses: HashMap::new() })
     }
 }
 
@@ -44,7 +45,7 @@ fn append(id: i64, chunk: *const c_void, size: usize) -> usize {
     let ptr = chunk as *const u8;
     let buffers = get_buffers();
     let buffer_size;
-    match buffers.transactions.get_mut(&id) {
+    match buffers.responses.get_mut(&id) {
         Some(buffer) => unsafe {
             buffer_size = buffer.len();
             buffer.extend(std::slice::from_raw_parts(ptr, size));
@@ -53,7 +54,7 @@ fn append(id: i64, chunk: *const c_void, size: usize) -> usize {
             let mut buffer = Vec::<u8>::new();
             buffer_size = buffer.len();
             buffer.extend(std::slice::from_raw_parts(ptr, size));
-            drop(buffers.transactions.insert(id, buffer));
+            drop(buffers.responses.insert(id, buffer));
         },
     }
     buffer_size
@@ -108,7 +109,7 @@ pub extern "C" fn commit(id: i64, content_encoding: *const c_char) {
     file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
 
     let buffers = get_buffers();
-    let buffer_ref = buffers.transactions.remove(&id);
+    let buffer_ref = buffers.responses.remove(&id);
     match buffer_ref {
         Some(buffer) => {
             thread::spawn(move || {process(&id, &buffer, &encoding)});
