@@ -83,6 +83,7 @@ class Service: public libecap::adapter::Service {
         void (*header)(int, const char*, const char*);
     private:
         void * module_;
+        std::string analyzerPath;
 };
 
 
@@ -153,7 +154,6 @@ class Xaction: public libecap::adapter::Xaction {
         FILE* chunkFile = 0;
         int id = 0;
         int contentLength = 0;
-        std::string requested_uri;
         BufferList *bufferList, *current, *last = 0;
 
 		typedef enum { opUndecided, opOn, opComplete, opNever } OperationState;
@@ -167,13 +167,6 @@ static const std::string CfgErrorPrefix =
 } // namespace Adapter
 
 Adapter::Service::Service(): libecap::adapter::Service() {
-    module_ = dlopen("/tmp/analyzer/target/debug/libanalyzer.so", RTLD_NOW | RTLD_GLOBAL);
-
-    if(module_) {
-        transfer = (void (*)(int, const void*, size_t))dlsym(module_, "transfer");
-        commit = (void (*)(int, const char*))dlsym(module_, "commit");
-        header = (void (*)(int, const char*, const char*))dlsym(module_, "header");
-    }
 }
 
 std::string Adapter::Service::uri() const {
@@ -197,19 +190,31 @@ void Adapter::Service::reconfigure(const libecap::Options &cfg) {
 	configure(cfg);
 }
 
-void Adapter::Service::setOne(const libecap::Name &name, const libecap::Area &valArea) {
-	const std::string value = valArea.toString();
-    if (name.assignedHostId())
-		; // skip host-standard options we do not know or care about
-	else
+void Adapter::Service::setOne(const libecap::Name &key, const libecap::Area &val) {
+	const std::string value = val.toString();
+    const std::string name = key.image();
+    if (key.assignedHostId()) {
+		// skip host-standard options we do not know or care about
+    } else if(name == "analyzerPath") {
+        analyzerPath = value;
+    } else
 		throw libecap::TextException(CfgErrorPrefix +
-			"unsupported configuration parameter: " + name.image());
+			"unsupported configuration parameter: " + name);
 }
 
 void Adapter::Service::start() {
-    std::clog << "Prism starting";
 	libecap::adapter::Service::start();
-	// custom code would go here, but this service does not have one
+
+    std::clog << "Prism starting";
+
+    module_ = dlopen(analyzerPath.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    //module_ = dlopen("/tmp/analyzer/target/debug/libanalyzer.so", RTLD_NOW | RTLD_GLOBAL);
+
+    if(module_) {
+        transfer = (void (*)(int, const void*, size_t))dlsym(module_, "transfer");
+        commit = (void (*)(int, const char*))dlsym(module_, "commit");
+        header = (void (*)(int, const char*, const char*))dlsym(module_, "header");
+    }
 }
 
 void Adapter::Service::stop() {

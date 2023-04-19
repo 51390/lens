@@ -39,9 +39,7 @@ RUN mkdir $BUILD_PATH
 WORKDIR $BUILD_PATH
 RUN wget http://www.squid-cache.org/Versions/v5/squid-5.7.tar.gz
 RUN tar xvpfz squid-5.7.tar.gz
-
 WORKDIR $BUILD_PATH/squid-5.7
-
 RUN bash bootstrap.sh
 RUN ./configure ${VALGRIND_FLAGS} --disable-dependency-tracking --enable-ssl-crtd --with-openssl --disable-strict-error-checking --enable-ecap --prefix=$INSTALL_PATH $ARCH_FLAGS
 RUN make
