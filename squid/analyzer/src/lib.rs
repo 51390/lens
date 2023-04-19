@@ -20,7 +20,6 @@ trait Instance {
 
 struct Buffers {
     responses: HashMap<i64, Vec<u8>>,
-    response_headers: HashMap<i64, HashMap<str, str>>,
 }
 
 impl Instance for Buffers {
