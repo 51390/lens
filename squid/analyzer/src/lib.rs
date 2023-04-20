@@ -91,7 +91,7 @@ fn process(id: &i64, buffer: &[u8], encoding: &str) {
 }
 
 #[no_mangle]
-pub extern "C" fn transfer(id: i64, chunk: *const c_void, size: usize) {
+pub extern "C" fn transfer(id: i64, chunk: *const c_void, size: usize, uri: *const c_char) {
     let buffer_size = append(id, chunk, size);
     let filename = format!("/tmp/request-body-{}.log", id);
     let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
@@ -100,7 +100,7 @@ pub extern "C" fn transfer(id: i64, chunk: *const c_void, size: usize) {
 }
 
 #[no_mangle]
-pub extern "C" fn commit(id: i64, content_encoding: *const c_char) {
+pub extern "C" fn commit(id: i64, content_encoding: *const c_char, uri: *const c_char) {
     let encoding = unsafe {CStr::from_ptr(content_encoding)}.to_str().unwrap().to_owned();
     let filename = format!("/tmp/request-body-{}.log", id);
     let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
@@ -118,11 +118,12 @@ pub extern "C" fn commit(id: i64, content_encoding: *const c_char) {
 }
 
 #[no_mangle]
-pub extern "C" fn header(id: i64, name: *const c_char, value: *const c_char) {
+pub extern "C" fn header(id: i64, name: *const c_char, value: *const c_char, uri: *const c_char) {
+    let uri = unsafe {CStr::from_ptr(uri)}.to_str().unwrap().to_owned();
     let name = unsafe {CStr::from_ptr(name)}.to_str().unwrap().to_owned();
     let value = unsafe {CStr::from_ptr(value)}.to_str().unwrap().to_owned();
     let filename = format!("/tmp/request-body-{}.log", id);
     let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
-    let content = format!("HEADER {} -> {}.\n", name, value);
+    let content = format!("HEADER {} -> {} (uri: {})\n", name, value, uri);
     file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
 }
