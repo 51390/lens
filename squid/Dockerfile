@@ -60,11 +60,7 @@ ARG ANALYZER_BUILD_PATH=/tmp/analyzer/
 ADD analyzer $ANALYZER_BUILD_PATH
 WORKDIR $ANALYZER_BUILD_PATH
 RUN echo 8
-RUN --mount=mode=0777,type=cache,target=${CARGO_HOME}/registry,sharing=locked,rw ls -alh ${CARGO_HOME}; sleep 10
-RUN --mount=mode=0777,type=cache,target=${CARGO_HOME}/registry,sharing=locked,rw ls -alh ${CARGO_HOME}/registry; sleep 10
-RUN --mount=mode=0777,type=cache,target=${CARGO_HOME}/registry,sharing=locked,rw ls -alh ${CARGO_HOME}; PATH=$PATH:${CARGO_HOME}/bin make build
-RUN --mount=mode=0777,type=cache,target=${CARGO_HOME}/registry,sharing=locked,rw ls -alh ${CARGO_HOME}; sleep 10
-RUN --mount=mode=0777,type=cache,target=${CARGO_HOME}/registry,sharing=locked,rw ls -alh ${CARGO_HOME}/registry; sleep 10
+RUN PATH=$PATH:${CARGO_HOME}/bin make build
 
 # squid config
 ADD conf/* /squid/etc/
