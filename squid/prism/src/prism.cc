@@ -78,9 +78,9 @@ class Service: public libecap::adapter::Service {
 		// Work
 		virtual MadeXactionPointer makeXaction(libecap::host::Xaction *hostx);
 
-        void (*transfer)(int, const void*, size_t);
-        void (*commit)(int, const char*);
-        void (*header)(int, const char*, const char*);
+        void (*transfer)(int, const void*, size_t, const char*);
+        void (*commit)(int, const char*, const char*);
+        void (*header)(int, const char*, const char*, const char*);
     private:
         void * module_;
         std::string analyzerPath;
@@ -100,14 +100,15 @@ class Cfgtor: public libecap::NamedValueVisitor {
 
 class HeaderVisitor: public libecap::NamedValueVisitor {
     public:
-        HeaderVisitor(libecap::shared_ptr<const Service> aSvc, int anId): svc(aSvc), id(anId) {}
+        HeaderVisitor(libecap::shared_ptr<const Service> aSvc, int anId, const char* anUri): svc(aSvc), id(anId), requestUri(anUri) {}
         virtual void visit(const libecap::Name &name, const libecap::Area &value) {
-            svc->header(id, name.image().c_str(), value.start);
+            svc->header(id, name.image().c_str(), value.start, requestUri);
         }
 
     private:
         libecap::shared_ptr<const Service> svc;
         int id;
+        const char* requestUri;
 };
 
 
@@ -150,11 +151,11 @@ class Xaction: public libecap::adapter::Xaction {
         libecap::shared_ptr<libecap::Message>  adapted;
 		libecap::host::Xaction *hostx; // Host transaction rep
                                 
-        LogOutput* lo;
         FILE* chunkFile = 0;
         int id = 0;
         int contentLength = 0;
         BufferList *bufferList, *current, *last = 0;
+        char* requestUri = 0;
 
 		typedef enum { opUndecided, opOn, opComplete, opNever } OperationState;
 		OperationState receivingVb;
@@ -208,12 +209,11 @@ void Adapter::Service::start() {
     std::clog << "Prism starting";
 
     module_ = dlopen(analyzerPath.c_str(), RTLD_NOW | RTLD_GLOBAL);
-    //module_ = dlopen("/tmp/analyzer/target/debug/libanalyzer.so", RTLD_NOW | RTLD_GLOBAL);
 
     if(module_) {
-        transfer = (void (*)(int, const void*, size_t))dlsym(module_, "transfer");
-        commit = (void (*)(int, const char*))dlsym(module_, "commit");
-        header = (void (*)(int, const char*, const char*))dlsym(module_, "header");
+        transfer = (void (*)(int, const void*, size_t, const char*))dlsym(module_, "transfer");
+        commit = (void (*)(int, const char*, const char*))dlsym(module_, "commit");
+        header = (void (*)(int, const char*, const char*, const char*))dlsym(module_, "header");
     }
 }
 
@@ -302,6 +302,7 @@ void Adapter::Xaction::start() {
 	} else {
 		hostx->useAdapted(adapted);
 	}
+
 }
 
 void Adapter::Xaction::stop() {
@@ -309,6 +310,10 @@ void Adapter::Xaction::stop() {
 	// the caller will delete
 
     _processBuffers();
+
+    if(requestUri) {
+        free(requestUri);
+    }
 }
 
 void Adapter::Xaction::_processBuffers() {
@@ -317,7 +322,7 @@ void Adapter::Xaction::_processBuffers() {
     while(sweeper) {
         BufferList* cleaner = sweeper;
         if(cleaner->size && cleaner->buffer) {
-            service->transfer(id, cleaner->buffer, cleaner->size);
+            service->transfer(id, cleaner->buffer, cleaner->size, requestUri);
 #ifndef PRISM_IN_PLACE
             free(cleaner->buffer);
 #endif
@@ -326,14 +331,14 @@ void Adapter::Xaction::_processBuffers() {
         sweeper = sweeper->next;
     }
 
-    HeaderVisitor hv(service, id);
+    HeaderVisitor hv(service, id, requestUri);
     adapted->header().visitEach(hv);
 
     if(adapted != 0 && adapted->header().hasAny(Adapter::headerContentEncoding)) {
         libecap::Header::Value v = adapted->header().value(Adapter::headerContentEncoding);
-        service->commit(id, v.start);
+        service->commit(id, v.start, requestUri);
     } else {
-        service->commit(id, "N/A");
+        service->commit(id, "N/A", requestUri);
     }
 }
 
@@ -402,6 +407,16 @@ void Adapter::Xaction::noteVbContentAvailable()
 {
 	Must(receivingVb == opOn);
 
+    if(!requestUri) {
+        // grab the request uri
+        const libecap::Message& cause = hostx->cause();
+        const libecap::RequestLine& rl = dynamic_cast<const libecap::RequestLine&>(cause.firstLine());
+        const libecap::Area uri = rl.uri();
+        requestUri = (char*)malloc(uri.size + 1);
+        memset(requestUri, 0, uri.size + 1);
+        memcpy(requestUri, uri.start, uri.size);
+    }
+
 	const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
     
     if(!last) {
@@ -424,19 +439,6 @@ void Adapter::Xaction::noteVbContentAvailable()
     if(!current) {
         current = last;
     }
-
-    lo = new LogOutput();
-    lo->data = last->buffer;
-    lo->n = last->size;
-    lo->counter = id;
-
-    const libecap::Message& cause = hostx->cause();
-    const libecap::RequestLine& rl = dynamic_cast<const libecap::RequestLine&>(cause.firstLine());
-    const libecap::Area uri = rl.uri();
-    lo->uri = (char*)malloc(uri.size + 1);
-    memset(lo->uri, 0, uri.size + 1);
-    memcpy(lo->uri, uri.start, uri.size);
-    //pthread_create(&lo->thread, 0, &writeLog, lo);
 
 	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
 	if (sendingAb == opOn)
