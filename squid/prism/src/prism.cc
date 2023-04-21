@@ -331,9 +331,6 @@ void Adapter::Xaction::_processBuffers() {
         sweeper = sweeper->next;
     }
 
-    HeaderVisitor hv(service, id, requestUri);
-    adapted->header().visitEach(hv);
-
     if(adapted != 0 && adapted->header().hasAny(Adapter::headerContentEncoding)) {
         libecap::Header::Value v = adapted->header().value(Adapter::headerContentEncoding);
         service->commit(id, v.start, requestUri);
@@ -415,6 +412,9 @@ void Adapter::Xaction::noteVbContentAvailable()
         requestUri = (char*)malloc(uri.size + 1);
         memset(requestUri, 0, uri.size + 1);
         memcpy(requestUri, uri.start, uri.size);
+
+        HeaderVisitor hv(service, id, requestUri);
+        adapted->header().visitEach(hv);
     }
 
 	const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
