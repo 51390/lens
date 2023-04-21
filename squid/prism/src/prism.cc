@@ -322,7 +322,7 @@ void Adapter::Xaction::_processBuffers() {
     while(sweeper) {
         BufferList* cleaner = sweeper;
         if(cleaner->size && cleaner->buffer) {
-            service->transfer(id, cleaner->buffer, cleaner->size, requestUri);
+            //service->transfer(id, cleaner->buffer, cleaner->size, requestUri);
 #ifndef PRISM_IN_PLACE
             free(cleaner->buffer);
 #endif
@@ -441,6 +441,11 @@ void Adapter::Xaction::noteVbContentAvailable()
     }
 
 	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
+
+    if (last->size && last->buffer) {
+        service->transfer(id, vb.start, vb.size, requestUri);
+    }
+
 	if (sendingAb == opOn)
 		hostx->noteAbContentAvailable();
 }
