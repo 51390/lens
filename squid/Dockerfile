@@ -39,9 +39,7 @@ RUN mkdir $BUILD_PATH
 WORKDIR $BUILD_PATH
 RUN wget http://www.squid-cache.org/Versions/v5/squid-5.7.tar.gz
 RUN tar xvpfz squid-5.7.tar.gz
-
 WORKDIR $BUILD_PATH/squid-5.7
-
 RUN bash bootstrap.sh
 RUN ./configure ${VALGRIND_FLAGS} --disable-dependency-tracking --enable-ssl-crtd --with-openssl --disable-strict-error-checking --enable-ecap --prefix=$INSTALL_PATH $ARCH_FLAGS
 RUN make
@@ -62,11 +60,7 @@ ARG ANALYZER_BUILD_PATH=/tmp/analyzer/
 ADD analyzer $ANALYZER_BUILD_PATH
 WORKDIR $ANALYZER_BUILD_PATH
 RUN echo 8
-RUN --mount=mode=0777,type=cache,target=${CARGO_HOME}/registry,sharing=locked,rw ls -alh ${CARGO_HOME}; sleep 10
-RUN --mount=mode=0777,type=cache,target=${CARGO_HOME}/registry,sharing=locked,rw ls -alh ${CARGO_HOME}/registry; sleep 10
-RUN --mount=mode=0777,type=cache,target=${CARGO_HOME}/registry,sharing=locked,rw ls -alh ${CARGO_HOME}; PATH=$PATH:${CARGO_HOME}/bin make build
-RUN --mount=mode=0777,type=cache,target=${CARGO_HOME}/registry,sharing=locked,rw ls -alh ${CARGO_HOME}; sleep 10
-RUN --mount=mode=0777,type=cache,target=${CARGO_HOME}/registry,sharing=locked,rw ls -alh ${CARGO_HOME}/registry; sleep 10
+RUN PATH=$PATH:${CARGO_HOME}/bin make build
 
 # squid config
 ADD conf/* /squid/etc/
