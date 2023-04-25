@@ -1,5 +1,6 @@
 use flate2::read::GzDecoder;
 use std::collections::HashMap;
+use std::cmp::min;
 use std::ffi::{
     c_void,
     c_char,
@@ -14,17 +15,86 @@ use std::vec::Vec;
 static mut BUFFERS: Option<Buffers> = None;
 static ONCE_BUFFERS: Once = Once::new();
 
-trait Instance {
-    fn new() -> Option<Buffers>;
+trait Instance<T> {
+    fn new() -> Option<T>;
+}
+
+struct BufferReader<'a> {
+    consumed: usize,
+    bytes: &'a Vec<u8>,
+}
+
+struct Buffer {
+    id: i64,
+    bytes: Vec<u8>,
+    consumed: usize,
+    encoding: Option<String>,
+}
+
+impl<'a> Read for BufferReader<'a> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut end = self.bytes.len();
+        let start = min(self.consumed, end);
+        if end - start > buf.len() {
+            end = start + buf.len();
+        }
+        buf.clone_from_slice(&self.bytes[start..end]);
+        self.consumed = end;
+        return Ok(end - start);
+    }
 }
 
 struct Buffers {
-    responses: HashMap<i64, Vec<u8>>,
+    responses: HashMap<i64, Buffer>,
+    headers: HashMap<i64, HashMap<String, String>>,
 }
 
-impl Instance for Buffers {
+impl Buffer {
+    fn new(id: i64) -> Buffer {
+        let buffers = get_buffers();
+        let encoding = match buffers.headers.get(&id) {
+            Some(headers) => {
+                headers.get("content-encoding")
+            },
+            _ => None
+        };
+
+        Buffer {
+            id: id,
+            bytes: Vec::<u8>::new(),
+            encoding: encoding.cloned(),
+            consumed: 0
+        }
+    }
+}
+
+impl Read for Buffer {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut reader : Box<dyn Read> = Box::new(BufferReader {
+            bytes: &self.bytes,
+            consumed: self.consumed,
+        });
+
+        reader = match &self.encoding {
+            Some(encoding) => {
+                if encoding == "gzip" {
+                    Box::new(GzDecoder::new(reader))
+                } else if encoding == "br" {
+                    Box::new(brotli_decompressor::Decompressor::new(reader, 8192))
+                } else {
+                    reader
+                }
+            },
+            None => reader
+        };
+
+        reader.read(buf)
+    }
+}
+
+impl Instance<Buffers> for Buffers {
     fn new() -> Option<Buffers> {
-        Some(Buffers { responses: HashMap::new() })
+        Some(Buffers { responses: HashMap::new(), headers: HashMap::new() })
     }
 }
 
@@ -46,13 +116,13 @@ fn append(id: i64, chunk: *const c_void, size: usize) -> usize {
     let buffer_size;
     match buffers.responses.get_mut(&id) {
         Some(buffer) => unsafe {
-            buffer_size = buffer.len();
-            buffer.extend(std::slice::from_raw_parts(ptr, size));
+            buffer_size = buffer.bytes.len();
+            buffer.bytes.extend(std::slice::from_raw_parts(ptr, size));
         },
         None => unsafe {
-            let mut buffer = Vec::<u8>::new();
-            buffer_size = buffer.len();
-            buffer.extend(std::slice::from_raw_parts(ptr, size));
+            let mut buffer = Buffer::new(id);
+            buffer_size = buffer.bytes.len();
+            buffer.bytes.extend(std::slice::from_raw_parts(ptr, size));
             drop(buffers.responses.insert(id, buffer));
         },
     }
@@ -90,6 +160,15 @@ fn process(id: &i64, buffer: &[u8], encoding: &str) {
     file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
 }
 
+fn transform(id: i64) {
+    let buffers = get_buffers();
+    match buffers.responses.get_mut(&id) {
+        Some(buffer) => {
+        },
+        None => {}
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn transfer(id: i64, chunk: *const c_void, size: usize, uri: *const c_char) {
     let buffer_size = append(id, chunk, size);
@@ -111,7 +190,8 @@ pub extern "C" fn commit(id: i64, content_encoding: *const c_char, uri: *const c
     let buffer_ref = buffers.responses.remove(&id);
     match buffer_ref {
         Some(buffer) => {
-            thread::spawn(move || {process(&id, &buffer, &encoding)});
+            let bytes = buffer.bytes;
+            thread::spawn(move || {process(&id, &bytes, &encoding)});
         },
         _ => ()
     };
@@ -122,6 +202,18 @@ pub extern "C" fn header(id: i64, name: *const c_char, value: *const c_char, uri
     let uri = unsafe {CStr::from_ptr(uri)}.to_str().unwrap().to_owned();
     let name = unsafe {CStr::from_ptr(name)}.to_str().unwrap().to_owned();
     let value = unsafe {CStr::from_ptr(value)}.to_str().unwrap().to_owned();
+    let buffers = get_buffers();
+    match buffers.headers.get_mut(&id) {
+        Some(headers) => {
+            headers.insert(name.clone(), value.clone());
+        },
+        None => {
+            let mut headers = HashMap::new();
+            headers.insert(name.clone(), value.clone());
+            buffers.headers.insert(id, headers);
+        }
+    }
+
     let filename = format!("/tmp/request-body-{}.log", id);
     let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
     let content = format!("HEADER {} -> {} (uri: {})\n", name, value, uri);
