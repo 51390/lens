@@ -53,6 +53,11 @@ void* writeLog(void *output) {
     return 0;
 }
 
+typedef struct {
+    size_t size;
+    const void* bytes;
+} Chunk;
+
 
 class Service: public libecap::adapter::Service {
 	public:
@@ -81,6 +86,7 @@ class Service: public libecap::adapter::Service {
         void (*transfer)(int, const void*, size_t, const char*);
         void (*commit)(int, const char*, const char*);
         void (*header)(int, const char*, const char*, const char*);
+        Chunk (*get_content)(int);
     private:
         void * module_;
         std::string analyzerPath;
@@ -214,6 +220,7 @@ void Adapter::Service::start() {
         transfer = (void (*)(int, const void*, size_t, const char*))dlsym(module_, "transfer");
         commit = (void (*)(int, const char*, const char*))dlsym(module_, "commit");
         header = (void (*)(int, const char*, const char*, const char*))dlsym(module_, "header");
+        get_content = (Chunk (*)(int))dlsym(module_, "get_content");
     }
 }
 
@@ -371,9 +378,17 @@ void Adapter::Xaction::abStopMaking()
 	stopVb();
 }
 
-
 libecap::Area Adapter::Xaction::abContent(size_type offset, size_type size) {
 	Must(sendingAb == opOn || sendingAb == opComplete);
+    Chunk c = service->get_content(id);
+
+    if(c.size) {
+        return libecap::Area::FromTempBuffer((const char*)c.bytes, c.size);
+    } else {
+        return libecap::Area();
+    }
+
+    /*
     BufferList* c =  current;
     if(c) {
         current = c->next;
@@ -381,6 +396,7 @@ libecap::Area Adapter::Xaction::abContent(size_type offset, size_type size) {
     } else {
         return libecap::Area();
     }
+    */
 }
 
 void Adapter::Xaction::abContentShift(size_type size) {

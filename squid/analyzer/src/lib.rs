@@ -8,6 +8,7 @@ use std::ffi::{
 };
 use std::fs::OpenOptions;
 use std::io::prelude::*;
+use std::ptr::null;
 use std::sync::Once;
 use std::thread;
 use std::vec::Vec;
@@ -29,6 +30,12 @@ struct Buffer {
     bytes: Vec<u8>,
     consumed: usize,
     encoding: Option<String>,
+}
+
+#[repr(C)]
+pub struct Chunk {
+    size: usize,
+    bytes: *const c_void
 }
 
 impl<'a> Read for BufferReader<'a> {
@@ -160,12 +167,24 @@ fn process(id: &i64, buffer: &[u8], encoding: &str) {
     file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
 }
 
-fn transform(id: i64) {
+fn transform(content: &mut [u8] ) -> Chunk {
+    Chunk {
+        size: content.len(),
+        bytes: content.as_ptr() as *const c_void,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_content(id: i64) -> Chunk {
     let buffers = get_buffers();
     match buffers.responses.get_mut(&id) {
         Some(buffer) => {
+            let consumed = buffer.bytes.len();
+            let content = &mut buffer.bytes[buffer.consumed..consumed];
+            buffer.consumed = consumed;
+            transform(content)
         },
-        None => {}
+        None => Chunk { size: 0, bytes: null() }
     }
 }
 
