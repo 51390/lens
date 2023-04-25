@@ -322,10 +322,7 @@ void Adapter::Xaction::_processBuffers() {
     while(sweeper) {
         BufferList* cleaner = sweeper;
         if(cleaner->size && cleaner->buffer) {
-            //service->transfer(id, cleaner->buffer, cleaner->size, requestUri);
-#ifndef PRISM_IN_PLACE
             free(cleaner->buffer);
-#endif
             delete(cleaner);
         }
         sweeper = sweeper->next;
@@ -429,12 +426,8 @@ void Adapter::Xaction::noteVbContentAvailable()
 
     last->next = 0;
     last->size = vb.size;
-#ifndef PRISM_IN_PLACE
     last->buffer = malloc(last->size);
     memcpy(last->buffer, vb.start, last->size);
-#else
-    last->buffer = (void*)vb.start;
-#endif
 
     if(!current) {
         current = last;
