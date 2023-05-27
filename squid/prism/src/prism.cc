@@ -21,39 +21,6 @@ using libecap::size_type;
 libecap::Name headerContentEncoding("Content-Encoding", libecap::Name::NextId());
 
 typedef struct {
-    int counter;
-    void* data;
-    size_t n;
-    pthread_t thread;
-    char* uri;
-} LogOutput;
-
-
-typedef struct _BufferList {
-    void* buffer;
-    size_t size;
-    struct _BufferList* next;
-} BufferList;
-
-extern "C"
-void* writeLog(void *output) {
-    LogOutput* lo = (LogOutput*)output;
-
-    char filename[8192];
-    memset(filename, 0, sizeof(filename));
-    sprintf(filename, "/tmp/request-%d.log", lo->counter);
-
-    FILE* stream = fopen(filename, "a+");
-
-    if(stream) {
-        fwrite(lo->data, sizeof(char), lo->n, stream);
-        fclose(stream);
-    }
-
-    return 0;
-}
-
-typedef struct {
     size_t size;
     const void* bytes;
 } Chunk;
@@ -160,7 +127,6 @@ class Xaction: public libecap::adapter::Xaction {
         FILE* chunkFile = 0;
         int id = 0;
         int contentLength = 0;
-        BufferList *bufferList, *current, *last = 0;
         char* requestUri = 0;
 
 		typedef enum { opUndecided, opOn, opComplete, opNever } OperationState;
@@ -252,9 +218,6 @@ Adapter::Xaction::Xaction(libecap::shared_ptr<Service> aService,
 	hostx(x),
 	receivingVb(opUndecided), sendingAb(opUndecided) {
     id = counter++;
-    current = 0;
-    bufferList = 0;
-    last = 0;
 }
 
 Adapter::Xaction::~Xaction() {
@@ -324,17 +287,6 @@ void Adapter::Xaction::stop() {
 }
 
 void Adapter::Xaction::_processBuffers() {
-    BufferList *sweeper = bufferList;
-
-    while(sweeper) {
-        BufferList* cleaner = sweeper;
-        if(cleaner->size && cleaner->buffer) {
-            free(cleaner->buffer);
-            delete(cleaner);
-        }
-        sweeper = sweeper->next;
-    }
-
     if(adapted != 0 && adapted->header().hasAny(Adapter::headerContentEncoding)) {
         libecap::Header::Value v = adapted->header().value(Adapter::headerContentEncoding);
         service->commit(id, v.start, requestUri);
@@ -360,9 +312,7 @@ void Adapter::Xaction::abMake()
 	Must(receivingVb == opOn || receivingVb == opComplete);
 	
 	sendingAb = opOn;
-    if(current) {
-        hostx->noteAbContentAvailable();
-    }
+    hostx->noteAbContentAvailable();
 }
 
 void Adapter::Xaction::abMakeMore()
@@ -387,16 +337,6 @@ libecap::Area Adapter::Xaction::abContent(size_type offset, size_type size) {
     } else {
         return libecap::Area();
     }
-
-    /*
-    BufferList* c =  current;
-    if(c) {
-        current = c->next;
-        return c->size ? libecap::Area::FromTempBuffer((const char*)c->buffer, c->size) : libecap::Area();
-    } else {
-        return libecap::Area();
-    }
-    */
 }
 
 void Adapter::Xaction::abContentShift(size_type size) {
@@ -432,25 +372,6 @@ void Adapter::Xaction::noteVbContentAvailable()
 
 	const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
     
-    /*
-    if(!last) {
-        bufferList = new BufferList();
-        last = bufferList;
-    } else {
-        last->next = new BufferList();
-        last = last->next;
-    }
-
-    last->next = 0;
-    last->size = vb.size;
-    last->buffer = malloc(last->size);
-    memcpy(last->buffer, vb.start, last->size);
-    */
-
-    if(!current) {
-        current = last;
-    }
-
 	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
 
     if (vb.size && vb.start) {
