@@ -432,6 +432,7 @@ void Adapter::Xaction::noteVbContentAvailable()
 
 	const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
     
+    /*
     if(!last) {
         bufferList = new BufferList();
         last = bufferList;
@@ -444,6 +445,7 @@ void Adapter::Xaction::noteVbContentAvailable()
     last->size = vb.size;
     last->buffer = malloc(last->size);
     memcpy(last->buffer, vb.start, last->size);
+    */
 
     if(!current) {
         current = last;
@@ -451,7 +453,7 @@ void Adapter::Xaction::noteVbContentAvailable()
 
 	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
 
-    if (last->size && last->buffer) {
+    if (vb.size && vb.start) {
         service->transfer(id, vb.start, vb.size, requestUri);
     }
 
