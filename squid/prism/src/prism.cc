@@ -124,7 +124,6 @@ class Xaction: public libecap::adapter::Xaction {
         libecap::shared_ptr<libecap::Message>  adapted;
 		libecap::host::Xaction *hostx; // Host transaction rep
                                 
-        FILE* chunkFile = 0;
         int id = 0;
         int contentLength = 0;
         char* requestUri = 0;
