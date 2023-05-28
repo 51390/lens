@@ -95,7 +95,12 @@ impl Read for Buffer {
             None => reader
         };
 
-        reader.read(buf)
+        let result = reader.read(buf);
+        match result {
+            Ok(num_read) => self.consumed += num_read,
+            _ => (),
+        }
+        result
     }
 }
 
@@ -179,10 +184,12 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
     let buffers = get_buffers();
     match buffers.responses.get_mut(&id) {
         Some(buffer) => {
-            let consumed = buffer.bytes.len();
-            let content = &mut buffer.bytes[buffer.consumed..consumed];
-            buffer.consumed = consumed;
-            transform(content)
+            //let consumed = buffer.bytes.len();
+            //let content = &mut buffer.bytes[buffer.consumed..consumed];
+            //buffer.consumed = consumed;
+            let mut content = Vec::<u8>::with_capacity(buffer.bytes.len());
+            buffer.read(content.as_mut_slice());
+            transform(content.as_mut_slice())
         },
         None => Chunk { size: 0, bytes: null() }
     }
