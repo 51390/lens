@@ -187,8 +187,21 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
             //let consumed = buffer.bytes.len();
             //let content = &mut buffer.bytes[buffer.consumed..consumed];
             //buffer.consumed = consumed;
-            let mut content = Vec::<u8>::with_capacity(buffer.bytes.len());
-            buffer.read(content.as_mut_slice());
+            let mut content : Vec<u8> = vec![0; buffer.bytes.len() - buffer.consumed];
+            let result = buffer.read(content.as_mut_slice());
+
+            let filename = format!("/tmp/content-transfer-{}.log", id);
+            let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
+            match result {
+                Ok(bytes) => {
+                    file.expect("Unable to open file.").write_all(&content).ok();
+                },
+                Err(message) => {
+                    let msg = format!("Error reading content: {}\n", message);
+                    file.expect("Unable to open file.").write_all(msg.as_bytes()).ok();
+                },
+            };
+
             transform(content.as_mut_slice())
         },
         None => Chunk { size: 0, bytes: null() }
