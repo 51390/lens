@@ -2,10 +2,10 @@
 ulimit -n 65536
 LOGFILE=/squid/var/logs/extended.log
 
+rsyslogd
+
 touch $LOGFILE
 chmod a+w $LOGFILE
-
-sleep 10  # wait for icap server to come online....
 
 if [ $VALGRIND == 1 ]
 then

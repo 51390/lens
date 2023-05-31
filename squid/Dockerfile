@@ -5,7 +5,7 @@ FROM ubuntu
 ARG ARCH_FLAGS
 ARG VALGRIND
 ARG VALGRIND_FLAGS
-ARG CARGO_HOME=/tmp/cargo/
+ARG CARGO_HOME
 
 ENV VALGRIND=${VALGRIND}
 ENV CARGO_HOME=${CARGO_HOME}
@@ -16,7 +16,7 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # package dependencies
 RUN apt update -y --fix-missing
-RUN apt install -y curl wget gcc g++ automake autoconf libtool openssl libssl-dev libcppunit-dev make pkg-config vim gdb zstd zlib1g-dev valgrind
+RUN apt install -y curl wget gcc g++ automake autoconf libtool openssl libssl-dev libcppunit-dev make pkg-config vim gdb zstd zlib1g-dev valgrind rsyslog
 
 # rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
@@ -67,6 +67,9 @@ ADD conf/* /squid/etc/
 RUN chmod 400 /squid/etc/bump*
 RUN /squid/libexec/security_file_certgen -c -s /squid/var/cache/squid/ssl_db -M 20MB
 RUN chmod a+w -R /squid/
+
+# syslog
+RUN sed -i '/imklog/s/^/#/' /etc/rsyslog.conf
 
 WORKDIR $INSTALL_PATH
 ADD bin/entrypoint.sh /squid/bin/entrypoint.sh
