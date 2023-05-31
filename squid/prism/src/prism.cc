@@ -50,6 +50,7 @@ class Service: public libecap::adapter::Service {
 		// Work
 		virtual MadeXactionPointer makeXaction(libecap::host::Xaction *hostx);
 
+        void (*init)();
         void (*transfer)(int, const void*, size_t, const char*);
         void (*commit)(int, const char*, const char*);
         void (*header)(int, const char*, const char*, const char*);
@@ -182,6 +183,9 @@ void Adapter::Service::start() {
     module_ = dlopen(analyzerPath.c_str(), RTLD_NOW | RTLD_GLOBAL);
 
     if(module_) {
+        init = (void (*)())dlsym(module_, "init");
+        init();
+
         transfer = (void (*)(int, const void*, size_t, const char*))dlsym(module_, "transfer");
         commit = (void (*)(int, const char*, const char*))dlsym(module_, "commit");
         header = (void (*)(int, const char*, const char*, const char*))dlsym(module_, "header");

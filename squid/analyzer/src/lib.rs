@@ -1,4 +1,5 @@
 use flate2::read::GzDecoder;
+use log::{SetLoggerError, LevelFilter, info};
 use std::collections::HashMap;
 use std::cmp::min;
 use std::ffi::{
@@ -12,6 +13,9 @@ use std::ptr::null;
 use std::sync::Once;
 use std::thread;
 use std::vec::Vec;
+use syslog::{Logger, LoggerBackend, Facility, Formatter3164, BasicLogger};
+
+
 
 static mut BUFFERS: Option<Buffers> = None;
 static ONCE_BUFFERS: Once = Once::new();
@@ -256,5 +260,24 @@ pub extern "C" fn header(id: i64, name: *const c_char, value: *const c_char, uri
     let filename = format!("/tmp/request-body-{}.log", id);
     let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
     let content = format!("HEADER {} -> {} (uri: {})\n", name, value, uri);
-    file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
+    info!("{}", content);
+    //file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
+}
+
+#[no_mangle]
+pub extern "C" fn init()  {
+    let formatter : Formatter3164 = Formatter3164 {
+        facility: Facility::LOG_USER,
+        hostname: None,
+        process: "analyzer".to_string(),
+        pid: 0,
+    };
+
+    let logger : Logger::<LoggerBackend, Formatter3164> = match syslog::unix(formatter) {
+        Err(e) => { println!("impossible to connect to syslog: {:?}", e); None },
+        Ok(_logger) => Some(_logger),
+    }.unwrap();
+
+    log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
+        .map(|()| log::set_max_level(LevelFilter::Info));
 }
