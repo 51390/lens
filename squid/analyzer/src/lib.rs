@@ -34,6 +34,7 @@ struct Buffer {
     bytes: Vec<u8>,
     consumed: usize,
     encoding: Option<String>,
+    transfer_chunk: Vec<u8>,
 }
 
 #[repr(C)]
@@ -74,7 +75,8 @@ impl Buffer {
             id: id,
             bytes: Vec::<u8>::new(),
             encoding: encoding.cloned(),
-            consumed: 0
+            consumed: 0,
+            transfer_chunk: Vec::<u8>::new(),
         }
     }
 }
@@ -89,14 +91,20 @@ impl Read for Buffer {
         reader = match &self.encoding {
             Some(encoding) => {
                 if encoding == "gzip" {
+                    info!("Decoding with gzip.");
                     Box::new(GzDecoder::new(reader))
                 } else if encoding == "br" {
+                    info!("Decoding with brotli.");
                     Box::new(brotli_decompressor::Decompressor::new(reader, 8192))
                 } else {
+                    info!("Unknown encoding, will send raw: {}", encoding);
                     reader
                 }
             },
-            None => reader
+            None => {
+                info!("No encoding, will send raw.");
+                reader
+            }
         };
 
         let result = reader.read(buf);
@@ -191,8 +199,16 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
             //let consumed = buffer.bytes.len();
             //let content = &mut buffer.bytes[buffer.consumed..consumed];
             //buffer.consumed = consumed;
-            let mut content : Vec<u8> = vec![0; buffer.bytes.len() - buffer.consumed];
+            let consumed = buffer.consumed;
+            let length = buffer.bytes.len();
+            let mut content : Vec<u8> = vec![0;  length - consumed];
+
+            if length <= consumed {
+                return Chunk { size: 0, bytes: null() };
+            }
             let result = buffer.read(content.as_mut_slice());
+
+            info!("Get content called for id {}; {} bytes on buffer, {} consumed", id, length, consumed);
 
             let filename = format!("/tmp/content-transfer-{}.log", id);
             let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
@@ -206,9 +222,15 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
                 },
             };
 
-            transform(content.as_mut_slice())
+            info!("Content length {}; head -> {}", content.len(), std::str::from_utf8(&content[0..5]).unwrap());
+
+            buffer.transfer_chunk = content.to_vec();
+            transform(buffer.transfer_chunk.as_mut_slice())
         },
-        None => Chunk { size: 0, bytes: null() }
+        None => {
+            info!("Get content called for id {}; buffer has not been initialized yet.", id);
+            Chunk { size: 0, bytes: null() }
+        }
     }
 }
 
@@ -229,6 +251,7 @@ pub extern "C" fn commit(id: i64, content_encoding: *const c_char, uri: *const c
     let content = format!("Finished appending, content transfer complete. Content encoding is {}.\n", encoding);
     file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
 
+    /*
     let buffers = get_buffers();
     let buffer_ref = buffers.responses.remove(&id);
     match buffer_ref {
@@ -238,6 +261,7 @@ pub extern "C" fn commit(id: i64, content_encoding: *const c_char, uri: *const c
         },
         _ => ()
     };
+    */
 }
 
 #[no_mangle]
