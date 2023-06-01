@@ -251,7 +251,6 @@ pub extern "C" fn commit(id: i64, content_encoding: *const c_char, uri: *const c
     let content = format!("Finished appending, content transfer complete. Content encoding is {}.\n", encoding);
     file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
 
-    /*
     let buffers = get_buffers();
     let buffer_ref = buffers.responses.remove(&id);
     match buffer_ref {
@@ -261,7 +260,6 @@ pub extern "C" fn commit(id: i64, content_encoding: *const c_char, uri: *const c
         },
         _ => ()
     };
-    */
 }
 
 #[no_mangle]
