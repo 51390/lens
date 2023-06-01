@@ -222,7 +222,7 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
                 },
             };
 
-            info!("Content length {}; head -> {}", content.len(), std::str::from_utf8(&content[0..5]).unwrap());
+            //info!("Content length {}; head -> {}", content.len(), std::str::from_utf8(&content[0..5]).unwrap());
 
             buffer.transfer_chunk = content.to_vec();
             transform(buffer.transfer_chunk.as_mut_slice())
