@@ -16,11 +16,19 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # package dependencies
 RUN apt update -y --fix-missing
-RUN apt install -y curl wget gcc g++ automake autoconf libtool openssl libssl-dev libcppunit-dev make pkg-config vim gdb zstd zlib1g-dev valgrind rsyslog
+RUN apt install -y \
+    curl wget gcc g++ automake autoconf libtool openssl \
+    libssl-dev libcppunit-dev make pkg-config vim gdb zstd \
+    zlib1g-dev valgrind rsyslog build-essential \
+    libelf-dev libdw-dev binutils-dev linux-tools-5.15.0-73-generic
+
+RUN ln -sf /usr/lib/linux-tools/5.15.0-73-generic/perf /usr/bin/perf
 
 # rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
-RUN --mount=mode=0777,type=cache,target=${CARGO_HOME},rw bash /tmp/rustup.sh -y
+RUN bash /tmp/rustup.sh -y
+RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup toolchain install nightly'
+RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup default nightly'
 
 # libecap
 ARG ECAP_BUILD_PATH=/tmp/build-ecap
