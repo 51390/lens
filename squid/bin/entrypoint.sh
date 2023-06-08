@@ -22,4 +22,11 @@ else
 fi;
 
 
+sleep 5
+export KID_PID=`ps -C squid -o pid,args | grep kid | awk '{ print $1 }'`
+echo "Will attach perf to pid $KID_PID"
+
+
+perf record --pid=$KID_PID -o /tmp/perf.data &
+
 tail -f $LOGFILE
