@@ -20,9 +20,10 @@ RUN apt install -y \
     curl wget gcc g++ automake autoconf libtool openssl \
     libssl-dev libcppunit-dev make pkg-config vim gdb zstd \
     zlib1g-dev valgrind rsyslog build-essential \
-    libelf-dev libdw-dev binutils-dev linux-tools-5.15.0-73-generic
+    google-perftools libgoogle-perftools-dev
 
-RUN ln -sf /usr/lib/linux-tools/5.15.0-73-generic/perf /usr/bin/perf
+
+ENV LIBS=-ltcmalloc_and_profiler
 
 # rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
@@ -78,6 +79,7 @@ RUN chmod a+w -R /squid/
 
 # syslog
 RUN sed -i '/imklog/s/^/#/' /etc/rsyslog.conf
+
 
 WORKDIR $INSTALL_PATH
 ADD bin/entrypoint.sh /squid/bin/entrypoint.sh

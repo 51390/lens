@@ -1,6 +1,7 @@
 
 ulimit -n 65536
 LOGFILE=/squid/var/logs/extended.log
+PERFTOOLS=${PERFTOOLS:-1}
 
 rsyslogd
 
@@ -17,16 +18,13 @@ then
         --leak-resolution=high \
         --show-reachable=yes \
         /squid/sbin/squid
+elif [ $PERFTOOLS == 1 ]
+then
+    HEAP_PROFILE_TIME_INTERVAL=30 \
+    HEAPPROFILE=/tmp/profile.log \
+    /squid/sbin/squid
 else
     /squid/sbin/squid
 fi;
-
-
-sleep 5
-export KID_PID=`ps -C squid -o pid,args | grep kid | awk '{ print $1 }'`
-echo "Will attach perf to pid $KID_PID"
-
-
-perf record --pid=$KID_PID -o /tmp/perf.data &
 
 tail -f $LOGFILE
