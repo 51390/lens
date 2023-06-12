@@ -20,7 +20,7 @@ then
         /squid/sbin/squid
 elif [ $PERFTOOLS == 1 ]
 then
-    HEAP_PROFILE_TIME_INTERVAL=30 \
+    HEAPPROFILESIGNAL=12 \
     HEAPPROFILE=/tmp/profile.log \
     /squid/sbin/squid
 else
