@@ -83,6 +83,8 @@ RUN chmod a+w -R /squid/
 RUN sed -i '/imklog/s/^/#/' /etc/rsyslog.conf
 
 
+ENV HEAPPROFILE=/tmp/heap.prof
+ENV HEAPPROFILESIGNAL=12
 WORKDIR $INSTALL_PATH
 ADD bin/entrypoint.sh /squid/bin/entrypoint.sh
 ENTRYPOINT bash /squid/bin/entrypoint.sh

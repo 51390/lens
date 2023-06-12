@@ -18,11 +18,6 @@ then
         --leak-resolution=high \
         --show-reachable=yes \
         /squid/sbin/squid
-elif [ $PERFTOOLS == 1 ]
-then
-    HEAPPROFILESIGNAL=12 \
-    HEAPPROFILE=/tmp/profile.log \
-    /squid/sbin/squid
 else
     /squid/sbin/squid
 fi;
