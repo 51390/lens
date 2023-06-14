@@ -22,7 +22,7 @@ RUN apt install -y \
     zlib1g-dev valgrind rsyslog build-essential \
     google-perftools libgoogle-perftools-dev
 
-
+# link in gperftools
 ENV LIBS=-ltcmalloc_and_profiler
 ENV CFLAGS=-ltcmalloc_and_profiler
 ENV CXXFLAGS=-ltcmalloc_and_profiler
@@ -82,9 +82,10 @@ RUN chmod a+w -R /squid/
 # syslog
 RUN sed -i '/imklog/s/^/#/' /etc/rsyslog.conf
 
-
+# gperftools heap profiler configuration
 ENV HEAPPROFILE=/tmp/heap.prof
-ENV HEAPPROFILESIGNAL=12
+ENV HEAPPROFILESIGNAL=28
+
 WORKDIR $INSTALL_PATH
 ADD bin/entrypoint.sh /squid/bin/entrypoint.sh
 ENTRYPOINT bash /squid/bin/entrypoint.sh

@@ -2,6 +2,9 @@
 ulimit -n 65536
 LOGFILE=/squid/var/logs/extended.log
 PERFTOOLS=${PERFTOOLS:-1}
+    
+export HEAPPROFILE=/tmp/heap.prof
+export HEAPPROFILESIGNAL=28
 
 rsyslogd
 
