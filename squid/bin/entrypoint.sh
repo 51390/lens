@@ -22,7 +22,7 @@ then
         --show-reachable=yes \
         /squid/sbin/squid
 else
-    /squid/sbin/squid
+    /squid/sbin/squid -N &
 fi;
 
 tail -f $LOGFILE
