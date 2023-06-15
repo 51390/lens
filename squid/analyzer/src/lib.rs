@@ -24,17 +24,17 @@ trait Instance<T> {
     fn new() -> Option<T>;
 }
 
-struct BufferReader<'a> {
+struct BufferReader {
     consumed: usize,
-    bytes: &'a Vec<u8>,
+    bytes: Vec<u8>,
 }
 
 struct Buffer {
     id: i64,
-    bytes: Vec<u8>,
     consumed: usize,
     encoding: Option<String>,
     transfer_chunk: Vec<u8>,
+    reader: BufferReader,
 }
 
 #[repr(C)]
@@ -43,7 +43,7 @@ pub struct Chunk {
     bytes: *const c_void
 }
 
-impl<'a> Read for BufferReader<'a> {
+impl Read for BufferReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let mut end = self.bytes.len();
         let start = min(self.consumed, end);
@@ -73,18 +73,22 @@ impl Buffer {
 
         Buffer {
             id: id,
-            bytes: Vec::<u8>::new(),
             encoding: encoding.cloned(),
             consumed: 0,
             transfer_chunk: Vec::<u8>::new(),
+            reader: BufferReader{ bytes: Vec::<u8>::new(), consumed: 0 },
         }
+    }
+
+    fn get_bytes(&mut self) -> &mut Vec::<u8> {
+        &mut self.reader.bytes
     }
 }
 
 impl Read for Buffer {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let mut reader : Box<dyn Read> = Box::new(BufferReader {
-            bytes: &self.bytes,
+            bytes: self.get_bytes().to_vec(),
             consumed: self.consumed,
         });
 
@@ -140,13 +144,13 @@ fn append(id: i64, chunk: *const c_void, size: usize) -> usize {
     let buffer_size;
     match buffers.responses.get_mut(&id) {
         Some(buffer) => unsafe {
-            buffer_size = buffer.bytes.len();
-            buffer.bytes.extend(std::slice::from_raw_parts(ptr, size));
+            buffer_size = buffer.get_bytes().len();
+            buffer.get_bytes().extend(std::slice::from_raw_parts(ptr, size));
         },
         None => unsafe {
             let mut buffer = Buffer::new(id);
-            buffer_size = buffer.bytes.len();
-            buffer.bytes.extend(std::slice::from_raw_parts(ptr, size));
+            buffer_size = buffer.get_bytes().len();
+            buffer.get_bytes().extend(std::slice::from_raw_parts(ptr, size));
             drop(buffers.responses.insert(id, buffer));
         },
     }
@@ -196,11 +200,11 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
     let buffers = get_buffers();
     match buffers.responses.get_mut(&id) {
         Some(buffer) => {
-            //let consumed = buffer.bytes.len();
-            //let content = &mut buffer.bytes[buffer.consumed..consumed];
+            //let consumed = buffer.get_bytes().len();
+            //let content = &mut buffer.get_bytes()[buffer.consumed..consumed];
             //buffer.consumed = consumed;
             let consumed = buffer.consumed;
-            let length = buffer.bytes.len();
+            let length = buffer.get_bytes().len();
             let mut content : Vec<u8> = vec![0;  length - consumed];
 
             if length <= consumed {
@@ -252,10 +256,10 @@ pub extern "C" fn commit(id: i64, content_encoding: *const c_char, uri: *const c
     file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
 
     let buffers = get_buffers();
-    let buffer_ref = buffers.responses.remove(&id);
+    let mut buffer_ref = buffers.responses.remove(&id);
     match buffer_ref {
-        Some(buffer) => {
-            let bytes = buffer.bytes;
+        Some(mut buffer) => {
+            let bytes = buffer.get_bytes().to_vec();
             thread::spawn(move || {process(&id, &bytes, &encoding)});
         },
         _ => ()
