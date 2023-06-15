@@ -1,5 +1,5 @@
 use flate2::read::GzDecoder;
-use log::{SetLoggerError, LevelFilter, info};
+use log::{LevelFilter, info};
 use std::collections::HashMap;
 use std::cmp::min;
 use std::ffi::{
@@ -34,7 +34,10 @@ struct Buffer {
     consumed: usize,
     encoding: Option<String>,
     transfer_chunk: Vec<u8>,
+    gz_decoder: GzDecoder<BufferReader>,
+    br_decoder: brotli_decompressor::Decompressor<BufferReader>,
     reader: BufferReader,
+
 }
 
 #[repr(C)]
@@ -50,7 +53,7 @@ impl Read for BufferReader {
         if end - start > buf.len() {
             end = start + buf.len();
         }
-        buf.clone_from_slice(&self.bytes[start..end]);
+        buf[0..end-start].clone_from_slice(&self.bytes[start..end]);
         self.consumed = end;
         return Ok(end - start);
     }
@@ -66,7 +69,7 @@ impl Buffer {
         let buffers = get_buffers();
         let encoding = match buffers.headers.get(&id) {
             Some(headers) => {
-                headers.get("content-encoding")
+                headers.get("Content-Encoding")
             },
             _ => None
         };
@@ -77,6 +80,8 @@ impl Buffer {
             consumed: 0,
             transfer_chunk: Vec::<u8>::new(),
             reader: BufferReader{ bytes: Vec::<u8>::new(), consumed: 0 },
+            gz_decoder: GzDecoder::new(BufferReader{ bytes: Vec::<u8>::new(), consumed: 0 }),
+            br_decoder: brotli_decompressor::Decompressor::new(BufferReader{ bytes: Vec::<u8>::new(), consumed: 0 }, 8192),
         }
     }
 
@@ -87,7 +92,7 @@ impl Buffer {
 
 impl Read for Buffer {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let mut reader : Box<dyn Read> = Box::new(BufferReader {
+        /*let mut reader : Box<dyn Read> = Box::new(BufferReader {
             bytes: self.get_bytes().to_vec(),
             consumed: self.consumed,
         });
@@ -109,9 +114,9 @@ impl Read for Buffer {
                 info!("No encoding, will send raw.");
                 reader
             }
-        };
+        };*/
 
-        let result = reader.read(buf);
+        let result = self.reader.read(buf);
         match result {
             Ok(num_read) => self.consumed += num_read,
             _ => (),
