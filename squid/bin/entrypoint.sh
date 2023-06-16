@@ -22,4 +22,5 @@ else
     /squid/sbin/squid -N &
 fi;
 
-tail -f $LOGFILE
+#tail -f $LOGFILE
+tail --retry -f /var/log/syslog
