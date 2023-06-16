@@ -34,7 +34,7 @@ struct Buffer {
     consumed: usize,
     encoding: Option<String>,
     transfer_chunk: Vec<u8>,
-    gz_decoder: GzDecoder<BufferReader>,
+    gz_decoder: flate2::read::GzDecoder<BufferReader>,
     br_decoder: brotli_decompressor::Decompressor<BufferReader>,
     reader: BufferReader,
 
@@ -48,6 +48,7 @@ pub struct Chunk {
 
 impl Read for BufferReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        info!("BufferReader consumed {} bytes, buf len is now {}", self.consumed, buf.len());
         let mut end = self.bytes.len();
         let start = min(self.consumed, end);
         if end - start > buf.len() {
@@ -55,7 +56,20 @@ impl Read for BufferReader {
         }
         buf[0..end-start].clone_from_slice(&self.bytes[start..end]);
         self.consumed = end;
+        info!("BufferReader passing on {} bytes, buf len is now {}", end - start, buf.len());
         return Ok(end - start);
+    }
+}
+
+impl Write for BufferReader {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.bytes.extend(buf);
+        info!("BufferReader wrote {} bytes, total inner buffer is now at {}", buf.len(), self.bytes.len());
+        return Ok(buf.len());
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -80,7 +94,7 @@ impl Buffer {
             consumed: 0,
             transfer_chunk: Vec::<u8>::new(),
             reader: BufferReader{ bytes: Vec::<u8>::new(), consumed: 0 },
-            gz_decoder: GzDecoder::new(BufferReader{ bytes: Vec::<u8>::new(), consumed: 0 }),
+            gz_decoder: flate2::read::GzDecoder::new(BufferReader{ bytes: Vec::<u8>::new(), consumed: 0 }),
             br_decoder: brotli_decompressor::Decompressor::new(BufferReader{ bytes: Vec::<u8>::new(), consumed: 0 }, 8192),
         }
     }
@@ -88,40 +102,56 @@ impl Buffer {
     fn get_bytes(&mut self) -> &mut Vec::<u8> {
         &mut self.reader.bytes
     }
+
+    fn write_bytes(&mut self, data: &[u8]) {
+        info!("Write bytes got {} bytes to store.", data.len());
+        match &self.encoding {
+            Some(encoding) => {
+                if encoding == "gzip" {
+                    info!("Using gzip decoder");
+                    //let br = self.gz_decoder.get_mut();
+                    let mut br = &mut self.gz_decoder;
+                    match br.write(data) {
+                        Ok(bytes) => { info!("Wrote {} bytes into gz decoder buff", bytes); },
+                        Err(msg) => { info!("Failed to write into gz decoder buff with {}", msg); }
+                    };
+                } else if encoding == "br" {
+                    info!("Using no decoder");
+                    self.reader.write(data);
+                } else {
+                    info!("Using no decoder");
+                    self.reader.write(data);
+                }
+            },
+            _ => { 
+                info!("Using no decoder");
+                self.reader.write(data); 
+            },
+
+        }
+    }
 }
 
 impl Read for Buffer {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        /*let mut reader : Box<dyn Read> = Box::new(BufferReader {
-            bytes: self.get_bytes().to_vec(),
-            consumed: self.consumed,
-        });
-
-        reader = match &self.encoding {
+        match &self.encoding {
             Some(encoding) => {
                 if encoding == "gzip" {
                     info!("Decoding with gzip.");
-                    Box::new(GzDecoder::new(reader))
+                    self.gz_decoder.read(buf)
                 } else if encoding == "br" {
                     info!("Decoding with brotli.");
-                    Box::new(brotli_decompressor::Decompressor::new(reader, 8192))
+                    self.br_decoder.read(buf)
                 } else {
                     info!("Unknown encoding, will send raw: {}", encoding);
-                    reader
+                    self.reader.read(buf)
                 }
             },
             None => {
                 info!("No encoding, will send raw.");
-                reader
+                self.reader.read(buf)
             }
-        };*/
-
-        let result = self.reader.read(buf);
-        match result {
-            Ok(num_read) => self.consumed += num_read,
-            _ => (),
         }
-        result
     }
 }
 
@@ -150,12 +180,14 @@ fn append(id: i64, chunk: *const c_void, size: usize) -> usize {
     match buffers.responses.get_mut(&id) {
         Some(buffer) => unsafe {
             buffer_size = buffer.get_bytes().len();
-            buffer.get_bytes().extend(std::slice::from_raw_parts(ptr, size));
+            //buffer.get_bytes().extend(std::slice::from_raw_parts(ptr, size));
+            buffer.write_bytes(std::slice::from_raw_parts(ptr, size));
         },
         None => unsafe {
             let mut buffer = Buffer::new(id);
             buffer_size = buffer.get_bytes().len();
-            buffer.get_bytes().extend(std::slice::from_raw_parts(ptr, size));
+            //buffer.get_bytes().extend(std::slice::from_raw_parts(ptr, size));
+            buffer.write_bytes(std::slice::from_raw_parts(ptr, size));
             drop(buffers.responses.insert(id, buffer));
         },
     }
@@ -208,33 +240,29 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
             //let consumed = buffer.get_bytes().len();
             //let content = &mut buffer.get_bytes()[buffer.consumed..consumed];
             //buffer.consumed = consumed;
-            let consumed = buffer.consumed;
-            let length = buffer.get_bytes().len();
-            let mut content : Vec<u8> = vec![0;  length - consumed];
+            let mut content : Vec<u8> = vec![0;  1];
 
-            if length <= consumed {
-                return Chunk { size: 0, bytes: null() };
-            }
             let result = buffer.read(content.as_mut_slice());
 
-            info!("Get content called for id {}; {} bytes on buffer, {} consumed", id, length, consumed);
 
             let filename = format!("/tmp/content-transfer-{}.log", id);
             let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
             match result {
                 Ok(bytes) => {
-                    file.expect("Unable to open file.").write_all(&content).ok();
+                    info!("Get content called for id {}; {} bytes on buffer", id, bytes);
+                    file.expect("Unable to open file.").write_all(&content[0..bytes]).ok();
+                    buffer.transfer_chunk = content[0..bytes].to_vec();
+
+                    transform(buffer.transfer_chunk.as_mut_slice())
                 },
                 Err(message) => {
                     let msg = format!("Error reading content: {}\n", message);
+                    info!("Get content failed for id {} with {}", id, msg);
                     file.expect("Unable to open file.").write_all(msg.as_bytes()).ok();
+
+                    Chunk { size: 0, bytes: null() }
                 },
-            };
-
-            //info!("Content length {}; head -> {}", content.len(), std::str::from_utf8(&content[0..5]).unwrap());
-
-            buffer.transfer_chunk = content.to_vec();
-            transform(buffer.transfer_chunk.as_mut_slice())
+            }
         },
         None => {
             info!("Get content called for id {}; buffer has not been initialized yet.", id);
