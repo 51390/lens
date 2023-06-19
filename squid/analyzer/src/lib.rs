@@ -37,10 +37,11 @@ struct Buffer {
     consumed: usize,
     encoding: Option<String>,
     transfer_chunk: Vec<u8>,
-    gz_decoder: flate2::read::GzDecoder<BufferReader>,
+    gz_decoder: Option<flate2::read::GzDecoder<BufferReader>>,
     br_decoder: brotli_decompressor::Decompressor<BufferReader>,
     reader: BufferReader,
     senders: [Sender<Vec<u8>>; 3],
+    available_receivers: [Option<Receiver<Vec<u8>>>; 3],
 
 }
 
@@ -143,14 +144,28 @@ impl Buffer {
             consumed: 0,
             transfer_chunk: Vec::<u8>::new(),
             reader: BufferReader{ state: 0, name: "raw".to_string(), receiver: receiver1, consumed: 0 },
-            gz_decoder: flate2::read::GzDecoder::new(BufferReader{ state: 0, name: "gz".to_string(), receiver: receiver2, consumed: 0 }),
+            gz_decoder: None,
             br_decoder: brotli_decompressor::Decompressor::new(BufferReader{ state: 0, name: "br".to_string(), receiver: receiver3, consumed: 0 }, 8192),
             senders: [sender1, sender2, sender3 ],
+            available_receivers: [ None, Some(receiver2), None ], // receivers left to initialize yet
         };
 
         info!("Done initializing buffer {}", id);
 
         b
+    }
+
+    fn gz_decoder(&mut self) -> &mut flate2::read::GzDecoder<BufferReader> {
+        match &self.gz_decoder {
+            None => {
+                let (sender2, receiver2) : (Sender<Vec<u8>>, Receiver<Vec<u8>>)= mpsc::channel();
+                self.gz_decoder =
+                    Some(flate2::read::GzDecoder::new(BufferReader{ state: 0, name: "gz".to_string(), receiver: self.available_receivers[1].take().unwrap(), consumed: 0 }));
+            },
+            _ => (),
+        };
+
+        self.gz_decoder.as_mut().unwrap()
     }
 
     fn write_bytes(&mut self, data: &[u8]) {
@@ -195,7 +210,7 @@ impl Read for Buffer {
             Some(encoding) => {
                 if encoding == "gzip" {
                     info!("Decoding with gzip.");
-                    self.gz_decoder.read(buf)
+                    self.gz_decoder().read(buf)
                 } else if encoding == "br" {
                     info!("Decoding with brotli.");
                     self.br_decoder.read(buf)
