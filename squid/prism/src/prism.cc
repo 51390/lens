@@ -124,6 +124,7 @@ class Xaction: public libecap::adapter::Xaction {
 		libecap::shared_ptr<const Service> service; // configuration access
         libecap::shared_ptr<libecap::Message>  adapted;
 		libecap::host::Xaction *hostx; // Host transaction rep
+        bool gzip = false;
                                 
         int id = 0;
         int contentLength = 0;
@@ -263,6 +264,15 @@ void Adapter::Xaction::start() {
         adapted->header().removeAny(libecap::headerContentLength);
     }
 
+    if(adapted->header().hasAny(Adapter::headerContentEncoding)) {
+        libecap::Header::Value v = adapted->header().value(Adapter::headerContentEncoding);
+        if(v.toString() == "gzip") {
+            adapted->header().removeAny(Adapter::headerContentEncoding);
+            service->header(id, "Content-Encoding", "gzip", "N/A");
+        }
+    }
+
+
 	// add a custom header
 	static const libecap::Name name("X-Ecap");
 	const libecap::Header::Value value =
@@ -372,15 +382,7 @@ void Adapter::Xaction::noteVbContentAvailable()
         HeaderVisitor hv(service, id, requestUri);
         adapted->header().visitEach(hv);
 
-        if(adapted->header().hasAny(Adapter::headerContentEncoding)) {
-            libecap::Header::Value v = adapted->header().value(Adapter::headerContentEncoding);
-            if(v.toString() == "gzip") {
-                adapted->header().removeAny(Adapter::headerContentEncoding);
-                adapted->header().removeAny(libecap::headerTransferEncoding);
-            }
-        }
     }
-    adapted->header().removeAny(Adapter::headerContentEncoding);
 
 	const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
     
