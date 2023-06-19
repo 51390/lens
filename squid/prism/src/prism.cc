@@ -371,7 +371,16 @@ void Adapter::Xaction::noteVbContentAvailable()
 
         HeaderVisitor hv(service, id, requestUri);
         adapted->header().visitEach(hv);
+
+        if(adapted->header().hasAny(Adapter::headerContentEncoding)) {
+            libecap::Header::Value v = adapted->header().value(Adapter::headerContentEncoding);
+            if(v.toString() == "gzip") {
+                adapted->header().removeAny(Adapter::headerContentEncoding);
+                adapted->header().removeAny(libecap::headerTransferEncoding);
+            }
+        }
     }
+    adapted->header().removeAny(Adapter::headerContentEncoding);
 
 	const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
     
