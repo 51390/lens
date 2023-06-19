@@ -179,13 +179,13 @@ impl Buffer {
                         Err(SendError(v)) => { info!("Failed to write into gz decoder buff."); },
                         _ => { info!("Wrote {} bytes into gz decoder buff", bytes); },
                     };
-                } else if encoding == "br" {
+                } /*else if encoding == "br" {
                     info!("Using br decoder");
                     match self.senders[2].send(data.to_vec()) {
                         Err(SendError(_)) => { info!("Failed to write into gz decoder buff."); },
                         _ => { info!("Wrote {} bytes into gz decoder buff", bytes); },
                     };
-               } else {
+               } */else {
                     info!("Using no decoder");
                     match self.senders[0].send(data.to_vec()) {
                         Err(SendError(_)) => { info!("Failed to write into gz decoder buff."); },
@@ -211,10 +211,10 @@ impl Read for Buffer {
                 if encoding == "gzip" {
                     info!("Decoding with gzip.");
                     self.gz_decoder().read(buf)
-                } else if encoding == "br" {
+                } /*else if encoding == "br" {
                     info!("Decoding with brotli.");
                     self.br_decoder.read(buf)
-                } else {
+                } */else {
                     info!("Unknown encoding, will send raw: {}", encoding);
                     self.reader.read(buf)
                 }
@@ -277,7 +277,7 @@ fn gzip_decompress(buffer: &[u8]) -> Vec<u8> {
 fn process(id: &i64, buffer: &[u8], encoding: &str) {
     let processed = match encoding {
         "gzip" => gzip_decompress(buffer),
-        "br" => brotli_decompress(buffer),
+        //"br" => brotli_decompress(buffer),
         _ => buffer.to_vec(),
     };
 
