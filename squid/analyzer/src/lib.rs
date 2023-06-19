@@ -158,7 +158,6 @@ impl Buffer {
     fn gz_decoder(&mut self) -> &mut flate2::read::GzDecoder<BufferReader> {
         match &self.gz_decoder {
             None => {
-                let (sender2, receiver2) : (Sender<Vec<u8>>, Receiver<Vec<u8>>)= mpsc::channel();
                 self.gz_decoder =
                     Some(flate2::read::GzDecoder::new(BufferReader{ state: 0, name: "gz".to_string(), receiver: self.available_receivers[1].take().unwrap(), consumed: 0 }));
             },
@@ -306,7 +305,7 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
             //let consumed = buffer.get_bytes().len();
             //let content = &mut buffer.get_bytes()[buffer.consumed..consumed];
             //buffer.consumed = consumed;
-            let mut content = [0u8; 8192];
+            let mut content = [0u8; 81920];
 
             let result = buffer.read(&mut content);
 
