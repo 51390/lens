@@ -264,13 +264,15 @@ void Adapter::Xaction::start() {
         adapted->header().removeAny(libecap::headerContentLength);
     }
 
+    /*
     if(adapted->header().hasAny(Adapter::headerContentEncoding)) {
         libecap::Header::Value v = adapted->header().value(Adapter::headerContentEncoding);
         if(v.toString() == "gzip") {
-            adapted->header().removeAny(Adapter::headerContentEncoding);
+            //adapted->header().removeAny(Adapter::headerContentEncoding);
             service->header(id, "Content-Encoding", "gzip", "N/A");
         }
     }
+    */
 
 
 	// add a custom header
