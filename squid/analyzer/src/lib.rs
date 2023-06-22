@@ -38,10 +38,11 @@ struct Buffer {
     encoding: Option<String>,
     transfer_chunk: Vec<u8>,
     gz_decoder: Option<flate2::read::GzDecoder<BufferReader>>,
+    gz_encoder: Option<flate2::read::GzEncoder<BufferReader>>,
     br_decoder: brotli_decompressor::Decompressor<BufferReader>,
     reader: BufferReader,
-    senders: [Sender<Vec<u8>>; 3],
-    available_receivers: [Option<Receiver<Vec<u8>>>; 3],
+    senders: [Sender<Vec<u8>>; 4],
+    available_receivers: [Option<Receiver<Vec<u8>>>; 4],
 
 }
 
@@ -58,33 +59,13 @@ impl Read for BufferReader {
         match self.receiver.try_recv() {
             Ok(data) => {
                 let bytes = data.len();
-                info!("Got {} from channel.", bytes);
-
-                if bytes == 0 && self.state == 0 && self.name == "gz" {
-                    self.state = 1;
-                    buf[0] = 31;
-                    buf[1] = 109;
-                    Ok(2)
-                } else if self.state == 1 && self.name == "gz" {
-                    self.state = 2;
-                    buf[0..bytes].clone_from_slice(&data[2..bytes]);
-                    Ok(bytes - 2)
-                } else {
-                    buf[0..bytes].clone_from_slice(data.as_slice());
-                    Ok(bytes)
-                }
+                info!("BF({}) -> Got {} bytes from channel.", self.name, bytes);
+                buf[0..bytes].clone_from_slice(data.as_slice());
+                Ok(bytes)
             },
             TryRecvError => {
-                if self.state == 0 && self.name == "gz" {
-                    info!("Failed getting data from channel, gz faked header.");
-                    self.state = 1;
-                    buf[0] = 31;
-                    buf[1] = 109;
-                    Ok(2)
-                } else {
-                    info!("Failed getting data from channel, returning 0 bytes read.");
-                    Ok(0)
-                }
+                info!("{} -> Failed getting data from channel, returning 0 bytes read.", self.name);
+                Ok(0)
             }
         }
 
@@ -136,6 +117,8 @@ impl Buffer {
         let (sender2, receiver2) : (Sender<Vec<u8>>, Receiver<Vec<u8>>)= mpsc::channel();
         let (sender3, receiver3) : (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel();
 
+        let (sender4, receiver4) : (Sender<Vec<u8>>, Receiver<Vec<u8>>)= mpsc::channel();
+
         info!("Initializing buffer {}", id);
 
         let b = Buffer {
@@ -145,10 +128,12 @@ impl Buffer {
             transfer_chunk: Vec::<u8>::new(),
             reader: BufferReader{ state: 0, name: "raw".to_string(), receiver: receiver1, consumed: 0 },
             gz_decoder: None,
+            gz_encoder: None,
             br_decoder: brotli_decompressor::Decompressor::new(BufferReader{ state: 0, name: "br".to_string(), receiver: receiver3, consumed: 0 }, 8192),
-            senders: [sender1, sender2, sender3 ],
-            available_receivers: [ None, Some(receiver2), None ], // receivers left to initialize yet
+            senders: [sender1, sender2, sender3, sender4 ],
+            available_receivers: [ None, Some(receiver2), None, Some(receiver4)], // receivers left to initialize yet
         };
+
 
         info!("Done initializing buffer {}", id);
 
@@ -159,12 +144,43 @@ impl Buffer {
         match &self.gz_decoder {
             None => {
                 self.gz_decoder =
-                    Some(flate2::read::GzDecoder::new(BufferReader{ state: 0, name: "gz".to_string(), receiver: self.available_receivers[1].take().unwrap(), consumed: 0 }));
+                    Some(flate2::read::GzDecoder::new(BufferReader{ state: 0, name: "gz decoder".to_string(), receiver: self.available_receivers[1].take().unwrap(), consumed: 0 }));
             },
             _ => (),
         };
 
         self.gz_decoder.as_mut().unwrap()
+    }
+
+    fn gz_encoder(&mut self) -> &mut flate2::read::GzEncoder<BufferReader> {
+        match &self.gz_encoder {
+            None => {
+                info!("Initializing GZ Encoder.");
+                self.gz_encoder =
+                    Some(flate2::read::GzEncoder::new(
+                        BufferReader{ state: 0, name: "gz encoder".to_string(), receiver: self.available_receivers[3].take().unwrap(), consumed: 0 },
+                        flate2::Compression::new(9)
+                    ));
+            },
+            _ => (),
+        };
+
+        self.gz_encoder.as_mut().unwrap()
+    }
+
+    fn read_encoded(&mut self, decoded_len: usize, decoded: &mut [u8], encoded: &mut [u8] ) -> std::io::Result<usize> {
+        match &self.encoding{
+            Some(encoding) => {
+                info!("Sending down {} bytes for encoder reader.", decoded_len);
+                self.senders[3].send(decoded[0..decoded_len].to_vec());
+                self.gz_encoder().read(encoded)
+            },
+            _ => { 
+                info!("{} -> {}", decoded.len(), encoded.len());
+                encoded.copy_from_slice(decoded);
+                Ok(decoded_len)
+            }
+        }
     }
 
     fn write_bytes(&mut self, data: &[u8]) {
@@ -178,13 +194,13 @@ impl Buffer {
                         Err(SendError(v)) => { info!("Failed to write into gz decoder buff."); },
                         _ => { info!("Wrote {} bytes into gz decoder buff", bytes); },
                     };
-                } /*else if encoding == "br" {
+                } else if encoding == "br" {
                     info!("Using br decoder");
-                    match self.senders[2].send(data.to_vec()) {
+                    match self.senders[0].send(data.to_vec()) {
                         Err(SendError(_)) => { info!("Failed to write into gz decoder buff."); },
                         _ => { info!("Wrote {} bytes into gz decoder buff", bytes); },
                     };
-               } */else {
+               } else {
                     info!("Using no decoder");
                     match self.senders[0].send(data.to_vec()) {
                         Err(SendError(_)) => { info!("Failed to write into gz decoder buff."); },
@@ -210,6 +226,7 @@ impl Read for Buffer {
                 if encoding == "gzip" {
                     info!("Decoding with gzip.");
                     self.gz_decoder().read(buf)
+                    //self.reader.read(buf)
                 } /*else if encoding == "br" {
                     info!("Decoding with brotli.");
                     self.br_decoder.read(buf)
@@ -291,6 +308,7 @@ fn process(id: &i64, buffer: &[u8], encoding: &str) {
 }
 
 fn transform(content: &mut [u8] ) -> Chunk {
+    info!("Transfrn retyrubg chunk of size {}.", content.len());
     Chunk {
         size: content.len(),
         bytes: content.as_ptr() as *const c_void,
@@ -314,11 +332,26 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
             let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
             match result {
                 Ok(bytes) => {
-                    info!("Get content called for id {}; {} bytes on buffer", id, bytes);
-                    file.expect("Unable to open file.").write_all(&content[0..bytes]).ok();
-                    buffer.transfer_chunk = content[0..bytes].to_vec();
+                    let mut encoded = [0u8; 81920];
+                    let mut encoder = buffer.gz_encoder();
 
-                    transform(buffer.transfer_chunk.as_mut_slice())
+                    info!("Will encode data now: {} bytes.", bytes);
+
+                    match buffer.read_encoded(bytes, &mut content, &mut encoded) {
+                        Ok(encoded_bytes) => {
+                            info!("Get content called for id {}; {} bytes on buffer", id, bytes);
+                            file.expect("Unable to open file.").write_all(&encoded[0..encoded_bytes]).ok();
+                            buffer.transfer_chunk = encoded[0..encoded_bytes].to_vec();
+
+                            transform(buffer.transfer_chunk.as_mut_slice())
+                        },
+                        Err(message) => {
+                            info!("Failed re-encoding with {}.", message);
+
+                            Chunk { size: 0, bytes: null() }
+                        }
+                    }
+
                 },
                 Err(message) => {
                     let msg = format!("Error reading content: {}\n", message);
