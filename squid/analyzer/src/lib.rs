@@ -1,3 +1,5 @@
+#![feature(panic_info_message)]
+
 use flate2::read::GzDecoder;
 use log::{LevelFilter, info};
 use std::collections::HashMap;
@@ -52,19 +54,36 @@ pub struct Chunk {
     bytes: *const c_void
 }
 
+fn consume(buf: &mut [u8], receiver: &mut std::sync::mpsc::Receiver<Vec<u8>>) -> Result<usize, String> {
+    let max_bytes = buf.len();
+    let mut received = Vec::<u8>::new();
+
+    for slice in receiver.try_iter() {
+        if slice.len() + received.len() > buf.len() {
+            return Err(format!("Not enough bytes in buffer to receive: {} vs. {}", slice.len() + received.len(), buf.len()));
+        }
+
+        info!("Consumed {} bytes from receiver.", slice.len());
+
+        received.extend(slice);
+    }
+
+    buf[0..received.len()].copy_from_slice(received.as_slice());
+    info!("Done consuming {} total bytes from receiver.", received.len());
+    Ok(received.len())
+}
+
 impl Read for BufferReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         info!("BufferReader.read called for {}", self.name);
 
-        match self.receiver.try_recv() {
-            Ok(data) => {
-                let bytes = data.len();
+        match consume(buf, &mut self.receiver) {
+            Ok(bytes) => {
                 info!("BF({}) -> Got {} bytes from channel.", self.name, bytes);
-                buf[0..bytes].clone_from_slice(data.as_slice());
                 Ok(bytes)
             },
-            TryRecvError => {
-                info!("{} -> Failed getting data from channel, returning 0 bytes read.", self.name);
+            Err(msg) => {
+                info!("BF({}) -> Failed getting data from channel, returning 0 bytes read. Error: {}", self.name, msg);
                 Ok(0)
             }
         }
@@ -172,7 +191,8 @@ impl Buffer {
         match &self.encoding{
             Some(encoding) => {
                 info!("Sending down {} bytes for encoder reader.", decoded_len);
-                self.senders[3].send(decoded[0..decoded_len].to_vec());
+                write_bytes_windowed(&decoded[0..decoded_len], 64, &mut self.senders[3]);
+                //self.senders[3].send(decoded[0..decoded_len].to_vec());
                 self.gz_encoder().read(encoded)
             },
             _ => { 
@@ -190,7 +210,7 @@ impl Buffer {
             Some(encoding) => {
                 if encoding == "gzip" {
                     info!("Will write to gzip decoder buffer");
-                    match self.senders[1].send(data.to_vec()) {
+                    match write_bytes_windowed(data, 32768, &mut self.senders[1]) {
                         Err(SendError(v)) => { info!("Failed to write into gz decoder buff."); },
                         _ => { info!("Wrote {} bytes into gz decoder buff", bytes); },
                     };
@@ -217,6 +237,22 @@ impl Buffer {
             },
         }
     }
+}
+
+fn write_bytes_windowed(data: &[u8], window_size: usize, sender: &mut std::sync::mpsc::Sender<Vec::<u8>>) -> std::result::Result<(), SendError<Vec::<u8>>> {
+    let mut written = 0;
+
+    while written < data.len() {
+        info!("Windowed write: {} / {}", written, data.len());
+        let to_write = min(data.len(), window_size);
+        let to_write_window = min(data.len(), written + to_write);
+        let window_slice = &data[written..to_write_window];
+        sender.send(window_slice.to_vec())?;
+        written += to_write;
+    }
+
+    info!("Windowed write done: {} / {}", written, data.len());
+    std::result::Result::Ok(())
 }
 
 impl Read for Buffer {
@@ -424,6 +460,25 @@ pub extern "C" fn header(id: i64, name: *const c_char, value: *const c_char, uri
     //file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
 }
 
+fn setup_hooks() {
+    let panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        if let Some(message) = panic_info.message() {
+            info!("Hooked panic with massage: {}", message);
+        }
+
+        if let Some(location) = panic_info.location() {
+            info!("panic occurred in file '{}' at line {}",
+                     location.file(),
+                     location.line(),
+                     );
+        } else {
+            info!("panic occurred but can't get location information...");
+        }
+        panic_hook(panic_info);
+    }));
+}
+
 #[no_mangle]
 pub extern "C" fn init()  {
     let formatter : Formatter3164 = Formatter3164 {
@@ -440,4 +495,6 @@ pub extern "C" fn init()  {
 
     log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
         .map(|()| log::set_max_level(LevelFilter::Info));
+
+    setup_hooks();
 }
