@@ -1,7 +1,11 @@
 
 ulimit -n 65536
+ulimit -c unlimited
+
 LOGFILE=/squid/var/logs/extended.log
 PERFTOOLS=${PERFTOOLS:-1}
+
+echo "/tmp/coredump/core.%p.%t" > /proc/sys/kernel/core_pattern
     
 rsyslogd
 
