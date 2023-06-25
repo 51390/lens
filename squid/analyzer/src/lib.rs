@@ -41,6 +41,7 @@ struct BufferWriter {
     name: String,
     writer: Box<dyn Write>,
     //writer: flate2::write::GzEncoder<OutputWriter>,
+    inject: bool,
 }
 
 struct OutputWriter {
@@ -52,6 +53,12 @@ impl Write for BufferWriter {
 
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         info!("({}) writer will send down {} bytes.", self.name, buf.len());
+
+        if self.inject {
+            self.inject = false;
+            self.writer.write_all("<!--injection here-->".as_bytes()).unwrap();
+        }
+
         match self.writer.write(buf) {
             Ok(bytes) => {
                 info!("({}) Ok for {} bytes", self.name, bytes);
@@ -207,8 +214,8 @@ impl Buffer {
 
         let output_writer = OutputWriter { name: "Output".to_string(), sender: output_sender };
         let gz_encoder = flate2::write::GzEncoder::new(output_writer, flate2::Compression::default());
-        let transformation_writer = BufferWriter { name: "Transformation".to_string(), writer: Box::new(gz_encoder) };
-        let gz_decoder = BufferWriter { name: "Input".to_string(), writer: Box::new(flate2::write::GzDecoder::new(transformation_writer)) };
+        let transformation_writer = BufferWriter { name: "Transformation".to_string(), writer: Box::new(gz_encoder), inject: true };
+        let gz_decoder = BufferWriter { name: "Input".to_string(), writer: Box::new(flate2::write::GzDecoder::new(transformation_writer)), inject: false };
 
         info!("Initializing buffer {}", id);
 
