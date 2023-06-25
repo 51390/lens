@@ -54,6 +54,7 @@ class Service: public libecap::adapter::Service {
         void (*transfer)(int, const void*, size_t, const char*);
         void (*commit)(int, const char*, const char*);
         void (*header)(int, const char*, const char*, const char*);
+        void (*content_done)(int);
         Chunk (*get_content)(int);
     private:
         void * module_;
@@ -121,7 +122,7 @@ class Xaction: public libecap::adapter::Xaction {
 	private:
         void _processBuffers();
 
-		libecap::shared_ptr<const Service> service; // configuration access
+		libecap::shared_ptr<const Service> service;
         libecap::shared_ptr<libecap::Message>  adapted;
 		libecap::host::Xaction *hostx; // Host transaction rep
         bool gzip = false;
@@ -191,6 +192,7 @@ void Adapter::Service::start() {
         commit = (void (*)(int, const char*, const char*))dlsym(module_, "commit");
         header = (void (*)(int, const char*, const char*, const char*))dlsym(module_, "header");
         get_content = (Chunk (*)(int))dlsym(module_, "get_content");
+        content_done = (void (*)(int))dlsym(module_, "content_done");
     }
 }
 
@@ -362,6 +364,7 @@ void Adapter::Xaction::noteVbContentDone(bool atEnd)
 {
 	Must(receivingVb == opOn);
 	stopVb();
+    service->content_done(id);
 	if (sendingAb == opOn) {
 		hostx->noteAbContentDone(atEnd);
 		sendingAb = opComplete;
