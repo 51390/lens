@@ -345,13 +345,38 @@ void Adapter::Xaction::abStopMaking()
 	stopVb();
 }
 
+void to_file(const char* fname, int id, const char* suffix, const void* content, size_t n, bool append) {
+    FILE *f;
+    char* filename = (char*)malloc(1024);
+    snprintf(filename, 1024, "%s-%d%s", fname, id, suffix);
+
+    if(append) {
+        f = fopen(filename, "a+");
+    } else {
+        f = fopen(filename, "w+");
+    }
+
+    fwrite(content, sizeof(char), n, f);
+
+    free(filename);
+    fclose(f);
+}
+
 libecap::Area Adapter::Xaction::abContent(size_type offset, size_type size) {
 	Must(sendingAb == opOn || sendingAb == opComplete);
     Chunk c = service->get_content(id);
 
     if(c.size) {
-        return libecap::Area::FromTempBuffer((const char*)c.bytes, c.size);
+        libecap::Area a = libecap::Area::FromTempBuffer((const char*)c.bytes, c.size);
+        std::string data = a.toString();
+        to_file("ab-content", id, ".log", data.c_str(), data.length(), true);
+        return a;
     } else {
+        /*char z[4096];
+        memset(z, 0, sizeof(z));
+
+        libecap::Area a = libecap::Area::FromTempBuffer((const char*)z, 4096);
+        return a;*/
         return libecap::Area();
     }
 }
