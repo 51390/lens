@@ -1,4 +1,5 @@
 #![feature(panic_info_message)]
+#![feature(deadline_api)]
 
 use flate2::read::GzDecoder;
 use log::{LevelFilter, info};
@@ -18,13 +19,15 @@ use std::sync::Once;
 use std::thread;
 use std::vec::Vec;
 use syslog::{Logger, LoggerBackend, Facility, Formatter3164, BasicLogger};
-use std::sync::mpsc::{Sender, Receiver, TryRecvError, SendError};
+use std::sync::mpsc::{Sender, Receiver, TryRecvError, SendError, RecvTimeoutError};
 use std::sync::mpsc;
+use zstream::Decoder;
 
 static mut BUFFERS: Option<Buffers> = None;
 static ONCE_BUFFERS: Once = Once::new();
 
 const WINDOW_LENGTH : usize = 128;
+const BUFF_SIZE: usize = 128;
 
 trait Instance<T> {
     fn new() -> Option<T>;
@@ -35,6 +38,8 @@ struct BufferReader {
     receiver: Receiver<Vec<u8>>,
     name: String,
     state: u32,
+    pending: Vec<u8>,
+    id: i64,
 }
 
 struct BufferWriter {
@@ -113,12 +118,28 @@ struct Buffer {
     output_receiver: Receiver<Vec<u8>>,
     input_writer: BufferWriter,
     bytes_total: usize,
+    decoder: Decoder,
+    decoder_sender: Sender<Vec<u8>>,
+    error: bool,
 }
 
 #[repr(C)]
 pub struct Chunk {
     size: usize,
     bytes: *const c_void
+}
+
+
+fn append_file(id: i64, prefix: String, data: &[u8]) {
+    let filename = format!("{}-{}.log", prefix, id);
+    let mut f = OpenOptions::new().create(true).write(true).append(true).open(filename).unwrap();
+    f.write_all(data);
+}
+
+fn update_file(id: i64, prefix: String, data: &[u8]) {
+    let filename = format!("{}-{}.log", prefix, id);
+    let mut f = OpenOptions::new().create(true).write(true).append(false).open(filename).unwrap();
+    f.write_all(data);
 }
 
 fn consume(buf: &mut [u8], receiver: &mut std::sync::mpsc::Receiver<Vec<u8>>) -> Result<usize, String> {
@@ -146,18 +167,37 @@ fn consume(buf: &mut [u8], receiver: &mut std::sync::mpsc::Receiver<Vec<u8>>) ->
 
 impl Read for BufferReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        info!("BufferReader.read called for {}", self.name);
-
-        match consume(buf, &mut self.receiver) {
-            Ok(bytes) => {
-                info!("BF({}) -> Got {} bytes from channel.", self.name, bytes);
-                Ok(bytes)
+        let pending = self.pending.len();
+        let n_data = match self.receiver.recv_deadline(std::time::Instant::now() + std::time::Duration::from_millis(200)) {
+            Ok(data) => {
+                append_file(self.id, "bytes-read".to_string(), &data);
+                let n_data = data.len();
+                self.pending.extend(data);
+                n_data
             },
+            RecvTimeoutError => {
+                0
+            }
+            /*
             Err(msg) => {
                 info!("BF({}) -> Failed getting data from channel, returning 0 bytes read. Error: {}", self.name, msg);
                 Ok(0)
-            }
-        }
+            }*/
+        };
+
+        let acum = self.pending.len();
+        let mut to_transfer = min(buf.len(), self.pending.len());
+        let drained : Vec<u8> = self.pending.drain(0..to_transfer).collect();
+        buf[0..to_transfer].copy_from_slice(&drained[0..to_transfer]);
+
+        append_file(self.id, "bytes-transferred".to_string(), &buf[0..to_transfer]);
+
+        info!(
+            "BF({}) -> {} pending; {} in; {} acum; {} transfer; {} drained; {} left.",
+            self.name, pending, n_data, acum, to_transfer, drained.len(), self.pending.len()
+        );
+
+        Ok(to_transfer)
 
         /*
         let mut end = self.bytes.len();
@@ -217,6 +257,8 @@ impl Buffer {
         let transformation_writer = BufferWriter { name: "Transformation".to_string(), writer: Box::new(gz_encoder), inject: true };
         let gz_decoder = BufferWriter { name: "Input".to_string(), writer: Box::new(flate2::write::GzDecoder::new(transformation_writer)), inject: false };
 
+        let (decoder_sender, decoder_receiver) : (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel();
+
         info!("Initializing buffer {}", id);
 
         let b = Buffer {
@@ -225,10 +267,10 @@ impl Buffer {
             encoding: encoding.cloned(),
             consumed: 0,
             transfer_chunk: Vec::<u8>::new(),
-            reader: BufferReader{ state: 0, name: "raw".to_string(), receiver: receiver1, consumed: 0 },
+            reader: BufferReader{ id: id, state: 0, name: "raw".to_string(), receiver: receiver1, consumed: 0, pending: Vec::<u8>::new() },
             gz_decoder: None,
             gz_encoder: None,
-            br_decoder: brotli_decompressor::Decompressor::new(BufferReader{ state: 0, name: "br".to_string(), receiver: receiver3, consumed: 0 }, 8192),
+            br_decoder: brotli_decompressor::Decompressor::new(BufferReader{ id:id,  state: 0, name: "br".to_string(), receiver: receiver3, consumed: 0, pending: Vec::<u8>::new() }, 8192),
             senders: [sender1, sender2, sender3, sender4 ],
             available_receivers: [ None, Some(receiver2), None, Some(receiver4)], // receivers left to initialize yet
             pending_encode: Vec::<u8>::new(),
@@ -241,6 +283,12 @@ impl Buffer {
             input_writer: gz_decoder,
             output_receiver: output_receiver,
             bytes_total: 0,
+            decoder: Decoder::new_with_size(
+                BufferReader { id: id, state: 0, name: "input reader".to_string(), receiver: decoder_receiver, consumed: 0, pending: Vec::<u8>::new() },
+                BUFF_SIZE,
+            ),
+            decoder_sender: decoder_sender,
+            error: false,
         };
 
         info!("Done initializing buffer {}", id);
@@ -258,7 +306,7 @@ impl Buffer {
         match &self.gz_decoder {
             None => {
                 self.gz_decoder =
-                    Some(flate2::read::GzDecoder::new(BufferReader{ state: 0, name: "gz decoder".to_string(), receiver: self.available_receivers[1].take().unwrap(), consumed: 0 }));
+                    Some(flate2::read::GzDecoder::new(BufferReader{ id: self.id, state: 0, name: "gz decoder".to_string(), receiver: self.available_receivers[1].take().unwrap(), consumed: 0, pending: Vec::<u8>::new() }));
             },
             _ => (),
         };
@@ -272,7 +320,7 @@ impl Buffer {
                 info!("Initializing GZ Encoder.");
                 self.gz_encoder =
                     Some(flate2::read::GzEncoder::new(
-                        BufferReader{ state: 0, name: "gz encoder".to_string(), receiver: self.available_receivers[3].take().unwrap(), consumed: 0 },
+                        BufferReader{ id: self.id, state: 0, name: "gz encoder".to_string(), receiver: self.available_receivers[3].take().unwrap(), consumed: 0, pending: Vec::<u8>::new() },
                         flate2::Compression::new(9)
                     ));
             },
@@ -325,10 +373,11 @@ impl Buffer {
     }
 
     fn write_bytes(&mut self, data: &[u8]) {
-        match self.bytes_sender.send(data.to_vec()) {
+        match self.decoder_sender.send(data.to_vec()) {
             Ok(()) => {
                 self.bytes_total += data.len();
                 info!("Sent {} bytes down to processing.", data.len());
+                append_file(self.id, "bytes-written".to_string(), data);
             },
             Err(SendError(sent)) => {
                 info!("Failed to send {} bytes", sent.len());
@@ -377,6 +426,7 @@ impl Buffer {
             },
         }
     }
+
 }
 
 fn write_bytes_windowed(is_done: bool, data: &[u8], window_size: usize, sender: &mut std::sync::mpsc::Sender<Vec<u8>>, pending: &mut Vec<u8>) -> std::result::Result<usize, SendError<Vec<u8>>> {
@@ -509,138 +559,41 @@ fn transform(content: &mut [u8] ) -> Chunk {
 
 #[no_mangle]
 pub extern "C" fn get_content(id: i64) -> Chunk {
-    const MIN: usize = 128;
     let buffers = get_buffers();
     match buffers.responses.get_mut(&id) {
         Some(buffer) => {
-            if buffer.bytes_total < MIN {
-                return Chunk { size: 0, bytes: null() };
-            }
 
-            let mut receiving_input = true;
-
-            //info!("Sending");
-
-            while receiving_input {
-                receiving_input = match buffer.bytes_receiver.try_recv() {
-                     Ok(data) => {
-                        if data.len() > 0 {
-                            match &buffer.encoding {
-                                Some(encoding) => {
-                                    if encoding == "gzip" {
-                                        info!("gzip path");
-                                        //info!("Sending {} bytes.", data.len());
-                                        buffer.input_writer.write_all(data.as_slice()).unwrap();
-                                        true
-                                    } else {
-                                        info!("non gzip path");
-                                        buffer.transfer_chunk = data.to_vec();
-                                        return transform(buffer.transfer_chunk.as_mut_slice());
-                                    }
-                                },
-                                _ => {
-                                    info!("non gzip path");
-                                    buffer.transfer_chunk = data.to_vec();
-                                    return transform(buffer.transfer_chunk.as_mut_slice());
-                                },
-                            }
-                        } else {
-                            false
-                        }
-                    },
-                    TryRecvError => {
-                        //info!("Done sending data.");
-                        false
-                    }
-               }
-            }
-
-            let mut output_buffer = Vec::<u8>::new();
-            let mut  receiving = true;
-
-            //info!("Receiving");
-
-            while receiving {
-                receiving = match buffer.output_receiver.try_recv() {
-                    Ok(data) => {
-                        if data.len() > 0 {
-                            //info!("Got {} bytes.", data.len());
-                            output_buffer.extend(data);
-                            true
-                        } else {
-                            false
-                        }
-                    },
-                    TryRecvError => {
-                        //info!("Done receiving data.");
-                        false
-                    }
+            if buffer.error {
+                return Chunk {
+                    size:0, bytes: null(),
                 };
+            }
+
+            /*if buffer.bytes_total < MIN {
+                return Chunk {
+                    size: 0, bytes: null()
+                };
+            }*/
+
+            let mut output_buffer : [u8; 32 * 1024 ] = [0; 32 * 1024];
+
+            let bytes = match buffer.decoder.read(&mut output_buffer) {
+                Ok(bytes) => {
+                    info!("Read {} bytes from decoder.", bytes);
+                    bytes
+                },
+                Err(e) => {
+                    info!("Failed reading will return 0 bytes. Error {}", e);
+                    buffer.error = true;
+                    0
+                }
             };
 
-            /*
-            for bytes in buffer.output_receiver.iter() {
-                output_buffer.extend(bytes)
-            }
-            */
+            update_file(buffer.id, "decoder-in".to_string(), buffer.decoder.bytes_in());
+            update_file(buffer.id, "decoder-out".to_string(), buffer.decoder.bytes_out());
 
-            //info!("Received {} bytes.", output_buffer.len());
-
-            buffer.transfer_chunk = output_buffer;
-
+            buffer.transfer_chunk = output_buffer[0..bytes].to_vec();
             transform(buffer.transfer_chunk.as_mut_slice())
-        },
-        None => {
-            info!("Get content called for id {}; buffer has not been initialized yet.", id);
-            Chunk { size: 0, bytes: null() }
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn get_content_ex(id: i64) -> Chunk {
-    let buffers = get_buffers();
-    match buffers.responses.get_mut(&id) {
-        Some(buffer) => {
-            //let consumed = buffer.get_bytes().len();
-            //let content = &mut buffer.get_bytes()[buffer.consumed..consumed];
-            //buffer.consumed = consumed;
-            let mut content = [0u8; 81920];
-
-            let result = buffer.read(&mut content);
-
-            let filename = format!("/tmp/content-transfer-{}.log", id);
-            let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
-            match result {
-                Ok(bytes) => {
-                    let mut encoded = [0u8; 81920];
-
-                    info!("Will encode data now: {} bytes.", bytes);
-
-                    match buffer.read_encoded(bytes, &mut content, &mut encoded) {
-                        Ok(encoded_bytes) => {
-                            info!("Get content called for id {}; {} bytes on buffer", id, bytes);
-                            file.expect("Unable to open file.").write_all(&encoded[0..encoded_bytes]).ok();
-                            buffer.transfer_chunk = encoded[0..encoded_bytes].to_vec();
-
-                            transform(buffer.transfer_chunk.as_mut_slice())
-                        },
-                        Err(message) => {
-                            info!("Failed re-encoding with {}.", message);
-
-                            Chunk { size: 0, bytes: null() }
-                        }
-                    }
-
-                },
-                Err(message) => {
-                    let msg = format!("Error reading content: {}\n", message);
-                    info!("Get content failed for id {} with {}", id, msg);
-                    file.expect("Unable to open file.").write_all(msg.as_bytes()).ok();
-
-                    Chunk { size: 0, bytes: null() }
-                },
-            }
         },
         None => {
             info!("Get content called for id {}; buffer has not been initialized yet.", id);

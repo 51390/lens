@@ -394,6 +394,12 @@ void Adapter::Xaction::noteVbContentAvailable()
 	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
 
     if (vb.size && vb.start) {
+        char filename[1024];
+        memset(filename, 0, sizeof(filename));
+        snprintf(filename, sizeof(filename), "/tmp/vb-content-%d.log", id);
+        FILE* f = fopen(filename, "a+");
+        fwrite(vb.start, sizeof(char), vb.size, f);
+        fclose(f);
         service->transfer(id, vb.start, vb.size, requestUri);
     }
 
