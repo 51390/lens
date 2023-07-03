@@ -2,7 +2,7 @@
 #![feature(deadline_api)]
 
 use flate2::read::GzDecoder;
-use log::{LevelFilter, info};
+use log::{LevelFilter, info, warn};
 use std::boxed::Box;
 use std::collections::HashMap;
 use std::cmp::min;
@@ -21,13 +21,13 @@ use std::vec::Vec;
 use syslog::{Logger, LoggerBackend, Facility, Formatter3164, BasicLogger};
 use std::sync::mpsc::{Sender, Receiver, TryRecvError, SendError, RecvTimeoutError};
 use std::sync::mpsc;
-use zstream::Decoder;
+use zstream::{Encoder, Decoder};
 
 static mut BUFFERS: Option<Buffers> = None;
 static ONCE_BUFFERS: Once = Once::new();
 
-const WINDOW_LENGTH : usize = 128;
-const BUFF_SIZE: usize = 128;
+const INPUT_BUFFER_SIZE: usize = 32 * 1024;
+const OUTPUT_BUFFER_SIZE: usize = 128 * 1024;
 
 trait Instance<T> {
     fn new() -> Option<T>;
@@ -118,7 +118,8 @@ struct Buffer {
     output_receiver: Receiver<Vec<u8>>,
     input_writer: BufferWriter,
     bytes_total: usize,
-    decoder: Decoder,
+    //decoder: Decoder,
+    encoder: Encoder,
     decoder_sender: Sender<Vec<u8>>,
     error: bool,
 }
@@ -131,15 +132,19 @@ pub struct Chunk {
 
 
 fn append_file(id: i64, prefix: String, data: &[u8]) {
+    /*
     let filename = format!("{}-{}.log", prefix, id);
     let mut f = OpenOptions::new().create(true).write(true).append(true).open(filename).unwrap();
     f.write_all(data);
+    */
 }
 
 fn update_file(id: i64, prefix: String, data: &[u8]) {
+    /*
     let filename = format!("{}-{}.log", prefix, id);
     let mut f = OpenOptions::new().create(true).write(true).append(false).open(filename).unwrap();
     f.write_all(data);
+    */
 }
 
 fn consume(buf: &mut [u8], receiver: &mut std::sync::mpsc::Receiver<Vec<u8>>) -> Result<usize, String> {
@@ -283,9 +288,12 @@ impl Buffer {
             input_writer: gz_decoder,
             output_receiver: output_receiver,
             bytes_total: 0,
-            decoder: Decoder::new_with_size(
-                BufferReader { id: id, state: 0, name: "input reader".to_string(), receiver: decoder_receiver, consumed: 0, pending: Vec::<u8>::new() },
-                BUFF_SIZE,
+            encoder: Encoder::new_with_size(
+                Decoder::new_with_size(
+                    BufferReader { id: id, state: 0, name: "input reader".to_string(), receiver: decoder_receiver, consumed: 0, pending: Vec::<u8>::new() },
+                    INPUT_BUFFER_SIZE
+                ),
+                INPUT_BUFFER_SIZE
             ),
             decoder_sender: decoder_sender,
             error: false,
@@ -330,50 +338,22 @@ impl Buffer {
         self.gz_encoder.as_mut().unwrap()
     }
 
-    fn read_encoded(&mut self, decoded_len: usize, decoded: &mut [u8], encoded: &mut [u8] ) -> std::io::Result<usize> {
-        match &self.encoding{
-            Some(encoding) => {
-                info!("Sending down {} bytes for encoder reader.", decoded_len);
-                match write_bytes_windowed(self.is_done, &decoded[0..decoded_len], WINDOW_LENGTH, &mut self.senders[3], &mut self.pending_encode){
-                    Ok(written_bytes) => {
-                        if written_bytes > 0 {
-                            self.encoding_available = true;
-                        } else {
-                            self.encoding_available = false;
-                        }
-                        info!("Sent {} / {} bytes  to encoder reader, {} left pending.", written_bytes, decoded_len, self.pending_encode.len());
-                    },
-                    Err(SendError(v)) => {
-                        info!("Error in read_encoded.");
-                    }
-                };
-                //self.senders[3].send(decoded[0..decoded_len].to_vec());
-                if self.encoding_available == true {
-                    info!("Will now read from gz encoder.");
-                    match self.gz_encoder().read(encoded) {
-                        Ok(bytes) => {
-                            info!("Done reading {} bytes from gz encoder.", bytes);
-                            Ok(bytes)
-                        },
-                        Err(msg) => {
-                            info!("Failed reading from gz encoder: {}", msg);
-                            Err(msg)
-                        }
-                    }
-                } else {
-                    Ok(0)
-                }
-            },
-            _ => { 
-                info!("{} -> {}", decoded.len(), encoded.len());
-                encoded.copy_from_slice(decoded);
-                Ok(decoded_len)
-            }
-        }
-    }
-
     fn write_bytes(&mut self, data: &[u8]) {
-        match self.decoder_sender.send(data.to_vec()) {
+        let mut sender = {
+            match &self.encoding {
+                Some(encoding) => {
+                    //&self.bytes_sender
+                    if encoding == "gzip" {
+                        &self.decoder_sender
+                    } else {
+                        &self.bytes_sender
+                    }
+                },
+                None => &self.bytes_sender
+            }
+        };
+
+        match sender.send(data.to_vec()) {
             Ok(()) => {
                 self.bytes_total += data.len();
                 info!("Sent {} bytes down to processing.", data.len());
@@ -384,78 +364,8 @@ impl Buffer {
             }
         }
     }
-
-    fn write_bytes_old(&mut self, data: &[u8]) {
-        info!("Write bytes got {} bytes to store.", data.len());
-        let bytes = data.len();
-        match &self.encoding {
-            Some(encoding) => {
-                if encoding == "gzip" {
-                    info!("Will write to gzip decoder buffer");
-                    match write_bytes_windowed(self.is_done, data, WINDOW_LENGTH, &mut self.senders[1], &mut self.pending_decode) {
-                        Ok(written_bytes) => {
-                            if written_bytes > 0 {
-                                self.decoding_available = true;
-                            } else {
-                                self.decoding_available = false;
-                            }
-                            info!("Sent {}/{} bytes into decoder reader, {} bytes left pending", written_bytes, bytes, self.pending_decode.len()); 
-                        },
-                        Err(SendError(v)) => { info!("Failed to write into gz decoder buff."); },
-                    };
-                } else if encoding == "br" {
-                    info!("Using br decoder");
-                    match self.senders[0].send(data.to_vec()) {
-                        Err(SendError(_)) => { info!("Failed to write into gz decoder buff."); },
-                        _ => { info!("Wrote {} bytes into gz decoder buff", bytes); },
-                    };
-               } else {
-                    info!("Using no decoder");
-                    match self.senders[0].send(data.to_vec()) {
-                        Err(SendError(_)) => { info!("Failed to write into gz decoder buff."); },
-                        _ => { info!("Wrote {} bytes into gz decoder buff", bytes); },
-                    };
-                }
-            },
-            _ => { 
-                info!("Using no decoder");
-                match self.senders[0].send(data.to_vec()) {
-                    Err(SendError(_)) => { info!("Failed to write into gz decoder buff."); },
-                    _ => { info!("Wrote {} bytes into gz decoder buff", bytes); },
-                };
-            },
-        }
-    }
-
 }
 
-fn write_bytes_windowed(is_done: bool, data: &[u8], window_size: usize, sender: &mut std::sync::mpsc::Sender<Vec<u8>>, pending: &mut Vec<u8>) -> std::result::Result<usize, SendError<Vec<u8>>> {
-    let mut written = 0;
-
-    let mut buffer = Vec::<u8>::new();
-    buffer.extend(pending.to_vec());
-    buffer.extend(data);
-    pending.clear();
-
-    while written < buffer.len() {
-        info!("Windowed write: {} / {}", written, pending.len());
-        let to_write = min(buffer.len(), window_size);
-        let to_write_window = min(buffer.len(), written + to_write);
-        let window_slice = buffer[written..to_write_window].to_vec();
-
-        if !is_done && window_slice.len() < window_size {
-            info!("Cannod send {} bytes, as window size is {}. {} total bytes pending.", window_slice.len(), window_size, pending.len());
-            pending.extend(window_slice);
-            break;
-        } else {
-            sender.send(window_slice)?;
-            written = to_write_window;
-        }
-    }
-
-    info!("Windowed write done: {} / {}", written, data.len());
-    std::result::Result::Ok(written)
-}
 
 impl Read for Buffer {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -538,15 +448,6 @@ fn process(id: &i64, buffer: &[u8], encoding: &str) {
         //"br" => brotli_decompress(buffer),
         _ => buffer.to_vec(),
     };
-
-    /*let filename = format!("/tmp/processed-request-body-{}.log", id);
-    let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
-    file.expect("Unable to open file.").write_all(&processed).ok();
-
-    let filename = format!("/tmp/request-body-{}.log", id);
-    let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
-    let content = format!("Finished processing. Content encoding is {}.\n", encoding);
-    file.expect("Unable to open file.").write_all(content.as_bytes()).ok();*/
 }
 
 fn transform(content: &mut [u8] ) -> Chunk {
@@ -555,13 +456,48 @@ fn transform(content: &mut [u8] ) -> Chunk {
         size: content.len(),
         bytes: content.as_ptr() as *const c_void,
     }
+    //Chunk { size: 0, bytes: null(), }
 }
 
 #[no_mangle]
 pub extern "C" fn get_content(id: i64) -> Chunk {
+    const MIN : usize = 1024;
     let buffers = get_buffers();
+    let mut output_buffer : [u8; OUTPUT_BUFFER_SIZE ] = [0; OUTPUT_BUFFER_SIZE];
     match buffers.responses.get_mut(&id) {
         Some(buffer) => {
+            if !buffer.is_done && buffer.bytes_total < MIN {
+                return Chunk { size: 0, bytes: null() };
+            }
+
+            match &buffer.encoding {
+                Some(encoding) => {
+                    if encoding != "gzip" {
+                       match buffer.bytes_receiver.try_recv() {
+                           Ok(bytes) => {
+                               buffer.transfer_chunk = bytes;
+                               return transform(&mut buffer.transfer_chunk);
+                           },
+                           TryRecvError => {
+                               warn!("Failed reading non-gzip stream");
+                               return Chunk { size: 0, bytes: null() };
+                           }
+                       }
+                    }
+                },
+                None => {
+                    match buffer.bytes_receiver.try_recv() {
+                        Ok(bytes) => {
+                               buffer.transfer_chunk = bytes;
+                            return transform(&mut buffer.transfer_chunk);
+                        },
+                        TryRecvError => {
+                            warn!("Failed reading non-gzip stream");
+                            return Chunk { size: 0, bytes: null() };
+                        }
+                    }
+                }
+            }
 
             if buffer.error {
                 return Chunk {
@@ -569,15 +505,15 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
                 };
             }
 
-            /*if buffer.bytes_total < MIN {
-                return Chunk {
-                    size: 0, bytes: null()
-                };
-            }*/
+            let result = {
+                if buffer.is_done {
+                    buffer.encoder.finish(&mut output_buffer)
+                } else {
+                    buffer.encoder.read(&mut output_buffer)
+                }
+            };
 
-            let mut output_buffer : [u8; 32 * 1024 ] = [0; 32 * 1024];
-
-            let bytes = match buffer.decoder.read(&mut output_buffer) {
+            let bytes = match  result {
                 Ok(bytes) => {
                     info!("Read {} bytes from decoder.", bytes);
                     bytes
@@ -589,8 +525,8 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
                 }
             };
 
-            update_file(buffer.id, "decoder-in".to_string(), buffer.decoder.bytes_in());
-            update_file(buffer.id, "decoder-out".to_string(), buffer.decoder.bytes_out());
+            update_file(buffer.id, "encoder-in".to_string(), buffer.encoder.bytes_in());
+            update_file(buffer.id, "encoder-out".to_string(), buffer.encoder.bytes_out());
 
             buffer.transfer_chunk = output_buffer[0..bytes].to_vec();
             transform(buffer.transfer_chunk.as_mut_slice())
