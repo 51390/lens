@@ -270,11 +270,10 @@ void Adapter::Xaction::start() {
     if(adapted->header().hasAny(Adapter::headerContentEncoding)) {
         libecap::Header::Value v = adapted->header().value(Adapter::headerContentEncoding);
         if(v.toString() == "gzip") {
-            //adapted->header().removeAny(Adapter::headerContentEncoding);
+            adapted->header().removeAny(Adapter::headerContentEncoding);
             service->header(id, "Content-Encoding", "gzip", "N/A");
         }
-    }
-    */
+    }*/
 
 
 	// add a custom header
@@ -346,6 +345,7 @@ void Adapter::Xaction::abStopMaking()
 }
 
 void to_file(const char* fname, int id, const char* suffix, const void* content, size_t n, bool append) {
+    /*
     FILE *f;
     char* filename = (char*)malloc(1024);
     snprintf(filename, 1024, "%s-%d%s", fname, id, suffix);
@@ -360,6 +360,7 @@ void to_file(const char* fname, int id, const char* suffix, const void* content,
 
     free(filename);
     fclose(f);
+    */
 }
 
 libecap::Area Adapter::Xaction::abContent(size_type offset, size_type size) {
@@ -419,12 +420,12 @@ void Adapter::Xaction::noteVbContentAvailable()
 	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
 
     if (vb.size && vb.start) {
-        char filename[1024];
+        /*char filename[1024];
         memset(filename, 0, sizeof(filename));
         snprintf(filename, sizeof(filename), "/tmp/vb-content-%d.log", id);
         FILE* f = fopen(filename, "a+");
         fwrite(vb.start, sizeof(char), vb.size, f);
-        fclose(f);
+        fclose(f);*/
         service->transfer(id, vb.start, vb.size, requestUri);
     }
 
