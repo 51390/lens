@@ -27,6 +27,7 @@ static mut BUFFERS: Option<Buffers> = None;
 static ONCE_BUFFERS: Once = Once::new();
 
 const INPUT_BUFFER_SIZE: usize = 32 * 1024;
+const ENCODER_BUFFER_SIZE : usize = 128 * 1024;
 const OUTPUT_BUFFER_SIZE: usize = 128 * 1024;
 
 trait Instance<T> {
@@ -45,7 +46,6 @@ struct BufferReader {
 struct BufferWriter {
     name: String,
     writer: Box<dyn Write>,
-    //writer: flate2::write::GzEncoder<OutputWriter>,
     inject: bool,
 }
 
@@ -147,29 +147,6 @@ fn update_file(id: i64, prefix: String, data: &[u8]) {
     */
 }
 
-fn consume(buf: &mut [u8], receiver: &mut std::sync::mpsc::Receiver<Vec<u8>>) -> Result<usize, String> {
-    let max_bytes = buf.len();
-    let mut received = Vec::<u8>::new();
-
-    info!("================================= Consume start =================================");
-
-    for slice in receiver.try_iter() {
-        if slice.len() + received.len() > buf.len() {
-            info!("Not enough bytes on destination buffer");
-            return Err(format!("Not enough bytes in buffer to receive: {} vs. {}", slice.len() + received.len(), buf.len()));
-        }
-
-        info!("Consumed {} bytes from receiver.", slice.len());
-
-        received.extend(slice);
-    }
-
-    info!("================================= Consume end =================================");
-    buf[0..received.len()].copy_from_slice(received.as_slice());
-    info!("Done consuming {} total bytes from receiver.", received.len());
-    Ok(received.len())
-}
-
 impl Read for BufferReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let pending = self.pending.len();
@@ -203,35 +180,8 @@ impl Read for BufferReader {
         );
 
         Ok(to_transfer)
-
-        /*
-        let mut end = self.bytes.len();
-        let start = min(self.consumed, end);
-        if end - start > buf.len() {
-            end = start + buf.len();
-        }
-        buf[0..end-start].clone_from_slice(&self.bytes[start..end]);
-        self.consumed = end;
-        info!("BufferReader passing on {} bytes, buf len is now {}", end - start, buf.len());
-        return Ok(end - start);
-        */
     }
 }
-
-/*
-
-impl BufferReader {
-    fn buff_write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.bytes.extend(buf);
-        info!("BufferReader wrote {} bytes, total inner buffer is now at {}", buf.len(), self.bytes.len());
-        return Ok(buf.len());
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-*/
 
 struct Buffers {
     responses: HashMap<i64, Buffer>,
@@ -293,7 +243,7 @@ impl Buffer {
                     BufferReader { id: id, state: 0, name: "input reader".to_string(), receiver: decoder_receiver, consumed: 0, pending: Vec::<u8>::new() },
                     INPUT_BUFFER_SIZE
                 ),
-                INPUT_BUFFER_SIZE
+                ENCODER_BUFFER_SIZE
             ),
             decoder_sender: decoder_sender,
             error: false,
@@ -361,35 +311,6 @@ impl Buffer {
             },
             Err(SendError(sent)) => {
                 info!("Failed to send {} bytes", sent.len());
-            }
-        }
-    }
-}
-
-
-impl Read for Buffer {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match &self.encoding {
-            Some(encoding) => {
-                if encoding == "gzip" {
-                    info!("Decoding with gzip.");
-                    if self.decoding_available {
-                        self.gz_decoder().read(buf)
-                    } else {
-                        Ok(0)
-                    }
-                    //self.reader.read(buf)
-                } /*else if encoding == "br" {
-                    info!("Decoding with brotli.");
-                    self.br_decoder.read(buf)
-                } */else {
-                    info!("Unknown encoding, will send raw: {}", encoding);
-                    self.reader.read(buf)
-                }
-            },
-            None => {
-                info!("No encoding, will send raw.");
-                self.reader.read(buf)
             }
         }
     }
@@ -488,7 +409,7 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
                 None => {
                     match buffer.bytes_receiver.try_recv() {
                         Ok(bytes) => {
-                               buffer.transfer_chunk = bytes;
+                            buffer.transfer_chunk = bytes;
                             return transform(&mut buffer.transfer_chunk);
                         },
                         TryRecvError => {
@@ -541,32 +462,10 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
 #[no_mangle]
 pub extern "C" fn transfer(id: i64, chunk: *const c_void, size: usize, uri: *const c_char) {
     append(id, chunk, size);
-    /*let filename = format!("/tmp/request-body-{}.log", id);
-    let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
-    let content = format!("Got a chunk with size {}\n", size);
-    file.expect("Unable to open file.").write_all(content.as_bytes()).ok();*/
 }
 
 #[no_mangle]
 pub extern "C" fn commit(id: i64, content_encoding: *const c_char, uri: *const c_char) {
-    /*let encoding = unsafe {CStr::from_ptr(content_encoding)}.to_str().unwrap().to_owned();
-    let filename = format!("/tmp/request-body-{}.log", id);
-    let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
-    let content = format!("Finished appending, content transfer complete. Content encoding is {}.\n", encoding);
-    file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
-
-    let buffers = get_buffers();
-    let mut buffer_ref = buffers.responses.remove(&id);*/
-
-    /*
-    match buffer_ref {
-        Some(mut buffer) => {
-            let bytes = buffer.get_bytes().to_vec();
-            thread::spawn(move || {process(&id, &bytes, &encoding)});
-        },
-        _ => ()
-    };
-    */
 }
 
 #[no_mangle]
@@ -585,12 +484,6 @@ pub extern "C" fn header(id: i64, name: *const c_char, value: *const c_char, uri
             buffers.headers.insert(id, headers);
         }
     }
-
-    let filename = format!("/tmp/request-body-{}.log", id);
-    let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
-    let content = format!("HEADER {} -> {} (uri: {})\n", name, value, uri);
-    info!("{}", content);
-    //file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
 }
 
 fn setup_hooks() {
