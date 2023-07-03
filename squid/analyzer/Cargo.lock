@@ -178,9 +178,9 @@ dependencies = [
 
 [[package]]
 name = "itoa"
-version = "1.0.6"
+version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "453ad9f582a441959e5f0d088b02ce04cfe8d51a8eaf077f12ac6d3e94164ca6"
+checksum = "c0aa48fab2893d8a49caa94082ae8488f4e1050d73b367881dcd2198f4199fd8"
 
 [[package]]
 name = "libc"
@@ -281,9 +281,9 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.164"
+version = "1.0.165"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e8c8cf938e98f769bc164923b06dce91cea1751522f46f8466461af04c9027d"
+checksum = "c939f902bb7d0ccc5bce4f03297e161543c2dcb30914faf032c2bd0b7a0d48fc"
 
 [[package]]
 name = "syslog"
@@ -448,7 +448,7 @@ checksum = "1a515f5799fe4961cb532f983ce2b23082366b898e52ffbce459c86f67c8378a"
 [[package]]
 name = "zstream"
 version = "0.1.0"
-source = "git+https://github.com/dpereira/zstream-rs.git?branch=feat/configurable-buffer-size#5b169b348c255608a156d6f56c46aac4a77a86cb"
+source = "git+https://github.com/dpereira/zstream-rs.git?branch=feat/configurable-buffer-size#41e9805857f1373422ed207cdf9b08eb9d9c8c38"
 dependencies = [
  "env_logger",
  "libc",
