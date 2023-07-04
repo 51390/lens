@@ -26,9 +26,9 @@ use zstream::{Encoder, Decoder};
 static mut BUFFERS: Option<Buffers> = None;
 static ONCE_BUFFERS: Once = Once::new();
 
-const INPUT_BUFFER_SIZE: usize = 32 * 1024;
-const ENCODER_BUFFER_SIZE : usize = 128 * 1024;
-const OUTPUT_BUFFER_SIZE: usize = 128 * 1024;
+const INPUT_BUFFER_SIZE: usize = 1024 * 1024;
+const ENCODER_BUFFER_SIZE : usize =  1024 * 1024;
+const OUTPUT_BUFFER_SIZE: usize = 1024 * 1024;
 
 trait Instance<T> {
     fn new() -> Option<T>;
@@ -216,7 +216,7 @@ impl Buffer {
 
         info!("Initializing buffer {}", id);
 
-        let b = Buffer {
+        let mut b = Buffer {
             id: id,
             is_done: false,
             encoding: encoding.cloned(),
@@ -248,6 +248,12 @@ impl Buffer {
             decoder_sender: decoder_sender,
             error: false,
         };
+
+        /*
+        for i in 0..OUTPUT_BUFFER_SIZE {
+            b.transfer_chunk.push(0);
+        }
+        */
 
         info!("Done initializing buffer {}", id);
 
@@ -371,10 +377,10 @@ fn process(id: &i64, buffer: &[u8], encoding: &str) {
     };
 }
 
-fn transform(content: &mut [u8] ) -> Chunk {
+fn transform(bytes: usize, content: &mut [u8] ) -> Chunk {
     info!("Transfrn retyrubg chunk of size {}.", content.len());
     Chunk {
-        size: content.len(),
+        size: bytes,
         bytes: content.as_ptr() as *const c_void,
     }
     //Chunk { size: 0, bytes: null(), }
@@ -384,9 +390,10 @@ fn transform(content: &mut [u8] ) -> Chunk {
 pub extern "C" fn get_content(id: i64) -> Chunk {
     const MIN : usize = 1024;
     let buffers = get_buffers();
-    let mut output_buffer : [u8; OUTPUT_BUFFER_SIZE ] = [0; OUTPUT_BUFFER_SIZE];
     match buffers.responses.get_mut(&id) {
         Some(buffer) => {
+            //let mut output_buffer = buffer.transfer_chunk.as_mut_slice();
+            let mut output_buffer : [u8; OUTPUT_BUFFER_SIZE ] = [0; OUTPUT_BUFFER_SIZE];
             if !buffer.is_done && buffer.bytes_total < MIN {
                 return Chunk { size: 0, bytes: null() };
             }
@@ -397,7 +404,7 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
                        match buffer.bytes_receiver.try_recv() {
                            Ok(bytes) => {
                                buffer.transfer_chunk = bytes;
-                               return transform(&mut buffer.transfer_chunk);
+                               return transform(buffer.transfer_chunk.len(), &mut buffer.transfer_chunk);
                            },
                            TryRecvError => {
                                warn!("Failed reading non-gzip stream");
@@ -410,7 +417,7 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
                     match buffer.bytes_receiver.try_recv() {
                         Ok(bytes) => {
                             buffer.transfer_chunk = bytes;
-                            return transform(&mut buffer.transfer_chunk);
+                            return transform(buffer.transfer_chunk.len(), &mut buffer.transfer_chunk);
                         },
                         TryRecvError => {
                             warn!("Failed reading non-gzip stream");
@@ -450,7 +457,7 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
             update_file(buffer.id, "encoder-out".to_string(), buffer.encoder.bytes_out());
 
             buffer.transfer_chunk = output_buffer[0..bytes].to_vec();
-            transform(buffer.transfer_chunk.as_mut_slice())
+            transform(bytes, buffer.transfer_chunk.as_mut_slice())
         },
         None => {
             info!("Get content called for id {}; buffer has not been initialized yet.", id);
