@@ -15,4 +15,4 @@ brotli-decompressor = "2.3.4"
 flate2 = "1.0"
 log = "0.4.18"
 syslog = "6.1.0"
-zstream = { git = "https://github.com/dpereira/zstream-rs.git", branch = "feat/configurable-buffer-size", version = "0.1.0" }
+zstream = { git = "https://github.com/dpereira/zstream-rs.git", version = "0.1.0" }
