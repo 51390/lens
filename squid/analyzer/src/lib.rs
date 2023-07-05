@@ -1,15 +1,11 @@
 #![feature(panic_info_message)]
 #![feature(deadline_api)]
 
-use log::{LevelFilter, info, warn};
+use log::{LevelFilter, info, error};
 use std::boxed::Box;
 use std::collections::HashMap;
 use std::cmp::min;
-use std::ffi::{
-    c_void,
-    c_char,
-    CStr
-};
+use std::ffi::{ c_void, c_char, CStr };
 use std::io::prelude::*;
 use std::ptr::null;
 use std::sync::Once;
@@ -21,15 +17,16 @@ use zstream::{Encoder, Decoder};
 static mut BUFFERS: Option<Buffers> = None;
 static ONCE_BUFFERS: Once = Once::new();
 
-const INPUT_BUFFER_SIZE: usize = 2 * 1024 * 1024;
-const ENCODER_BUFFER_SIZE : usize =  2 * 1024 * 1024;
-const OUTPUT_BUFFER_SIZE: usize = 2 * 1024 * 1024;
+const INPUT_BUFFER_SIZE: usize = 32 * 1024;
+const ENCODER_BUFFER_SIZE : usize =  1024 * 1024;
+const OUTPUT_BUFFER_SIZE: usize = 1024 * 1024;
 
 trait Instance<T> {
     fn new() -> Option<T>;
 }
 
 struct BufferReader {
+    id: i64,
     receiver: Receiver<Vec<u8>>,
     name: String,
     pending: Vec<u8>,
@@ -37,6 +34,7 @@ struct BufferReader {
 
 struct Buffer {
     id: i64,
+    uri: String,
     is_done: bool,
     encoding: Option<String>,
     transfer_chunk: Vec<u8>,
@@ -57,7 +55,7 @@ pub struct Chunk {
 impl Read for BufferReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let pending = self.pending.len();
-        let n_data = match self.receiver.recv_deadline(std::time::Instant::now() + std::time::Duration::from_millis(200)) {
+        let n_data = match self.receiver.try_recv() {
             Ok(data) => {
                 let n_data = data.len();
                 self.pending.extend(data);
@@ -88,7 +86,7 @@ struct Buffers {
 }
 
 impl Buffer {
-    fn new(id: i64) -> Buffer {
+    fn new(id: i64, uri: String) -> Buffer {
         let buffers = get_buffers();
         let encoding = match buffers.headers.get(&id) {
             Some(headers) => {
@@ -102,6 +100,7 @@ impl Buffer {
 
         Buffer {
             id: id,
+            uri: uri,
             is_done: false,
             encoding: encoding.cloned(),
             transfer_chunk: Vec::<u8>::new(),
@@ -110,7 +109,7 @@ impl Buffer {
             bytes_receiver: bytes_receiver,
             encoder: Encoder::new_with_size(
                 Decoder::new_with_size(
-                    BufferReader { name: "input reader".to_string(), receiver: decoder_receiver, pending: Vec::<u8>::new() },
+                    BufferReader { id: id, name: "input reader".to_string(), receiver: decoder_receiver, pending: Vec::<u8>::new() },
                     INPUT_BUFFER_SIZE
                 ),
                 ENCODER_BUFFER_SIZE
@@ -122,7 +121,7 @@ impl Buffer {
 
     fn done(&mut self) {
         self.is_done = true;
-        info!("Transaction {} is set as done.", self.id);
+        info!("Transaction {} is set as done for uri: {}", self.id, self.uri);
     }
 
     fn write_bytes(&mut self, data: &[u8]) {
@@ -142,10 +141,9 @@ impl Buffer {
         match sender.send(data.to_vec()) {
             Ok(()) => {
                 self.bytes_total += data.len();
-                info!("Sent {} bytes down to processing.", data.len());
             },
             Err(SendError(sent)) => {
-                info!("Failed to send {} bytes", sent.len());
+                error!("Failed to send {} bytes", sent.len());
             }
         }
     }
@@ -169,7 +167,7 @@ fn get_buffers() -> &'static mut Buffers {
     }
 }
 
-fn append(id: i64, chunk: *const c_void, size: usize) {
+fn append(id: i64, chunk: *const c_void, size: usize, uri: *const c_char) {
     let ptr = chunk as *const u8;
     let buffers = get_buffers();
     match buffers.responses.get_mut(&id) {
@@ -177,7 +175,9 @@ fn append(id: i64, chunk: *const c_void, size: usize) {
             buffer.write_bytes(std::slice::from_raw_parts(ptr, size));
         },
         None => unsafe {
-            let mut buffer = Buffer::new(id);
+            let uri_str = CStr::from_ptr(uri).to_str().unwrap().to_owned();
+            info!("Initializing transaction {} for {}", id, uri_str);
+            let mut buffer = Buffer::new(id, uri_str);
             buffer.write_bytes(std::slice::from_raw_parts(ptr, size));
             drop(buffers.responses.insert(id, buffer));
         },
@@ -194,7 +194,6 @@ fn brotli_decompress(buffer: &[u8]) -> Vec<u8> {
 */
 
 fn transform(bytes: usize, content: &mut [u8] ) -> Chunk {
-    info!("Transfrn retyrubg chunk of size {}.", content.len());
     Chunk {
         size: bytes,
         bytes: content.as_ptr() as *const c_void,
@@ -208,12 +207,6 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
     let buffers = get_buffers();
     match buffers.responses.get_mut(&id) {
         Some(buffer) => {
-            //let mut output_buffer = buffer.transfer_chunk.as_mut_slice();
-            let mut output_buffer : [u8; OUTPUT_BUFFER_SIZE ] = [0; OUTPUT_BUFFER_SIZE];
-            if !buffer.is_done && buffer.bytes_total < MIN {
-                return Chunk { size: 0, bytes: null() };
-            }
-
             match &buffer.encoding {
                 Some(encoding) => {
                     if encoding != "gzip" {
@@ -222,8 +215,7 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
                                buffer.transfer_chunk = bytes;
                                return transform(buffer.transfer_chunk.len(), &mut buffer.transfer_chunk);
                            },
-                           Err(_) => {
-                               warn!("Failed reading non-gzip stream");
+                           Err(e) => {
                                return Chunk { size: 0, bytes: null() };
                            }
                        }
@@ -236,7 +228,6 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
                             return transform(buffer.transfer_chunk.len(), &mut buffer.transfer_chunk);
                         },
                         Err(_) => {
-                            warn!("Failed reading non-gzip stream");
                             return Chunk { size: 0, bytes: null() };
                         }
                     }
@@ -249,6 +240,7 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
                 };
             }
 
+            let mut output_buffer : [u8; OUTPUT_BUFFER_SIZE ] = [0; OUTPUT_BUFFER_SIZE];
             let result = {
                 if buffer.is_done {
                     buffer.encoder.finish(&mut output_buffer)
@@ -258,12 +250,9 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
             };
 
             let bytes = match  result {
-                Ok(bytes) => {
-                    //info!("Read {} bytes from decoder.", bytes);
-                    bytes
-                },
+                Ok(bytes) => { bytes },
                 Err(e) => {
-                    info!("Failed reading will return 0 bytes. Error {}", e);
+                    error!("Failed reading for id {} (uri: {}). Will return 0 bytes. Error: {}", buffer.id, buffer.uri, e);
                     buffer.error = true;
                     0
                 }
@@ -279,8 +268,8 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
 }
 
 #[no_mangle]
-pub extern "C" fn transfer(id: i64, chunk: *const c_void, size: usize, _uri: *const c_char) {
-    append(id, chunk, size);
+pub extern "C" fn transfer(id: i64, chunk: *const c_void, size: usize, uri: *const c_char) {
+    append(id, chunk, size, uri);
 }
 
 #[no_mangle]
