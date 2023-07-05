@@ -10,16 +10,12 @@ use std::ffi::{
     c_char,
     CStr
 };
-use std::fs::OpenOptions;
 use std::io::prelude::*;
-use std::io::{Error, ErrorKind};
 use std::ptr::null;
 use std::sync::Once;
-use std::thread;
 use std::vec::Vec;
 use syslog::{Logger, LoggerBackend, Facility, Formatter3164, BasicLogger};
-use std::sync::mpsc::{Sender, Receiver, TryRecvError, SendError, RecvTimeoutError};
-use std::sync::mpsc;
+use std::sync::mpsc::{channel, Sender, Receiver, SendError};
 use zstream::{Encoder, Decoder};
 
 static mut BUFFERS: Option<Buffers> = None;
@@ -34,12 +30,9 @@ trait Instance<T> {
 }
 
 struct BufferReader {
-    consumed: usize,
     receiver: Receiver<Vec<u8>>,
     name: String,
-    state: u32,
     pending: Vec<u8>,
-    id: i64,
 }
 
 struct Buffer {
@@ -70,13 +63,13 @@ impl Read for BufferReader {
                 self.pending.extend(data);
                 n_data
             },
-            RecvTimeoutError => {
+            Err(_) => {
                 0
             }
         };
 
         let acum = self.pending.len();
-        let mut to_transfer = min(buf.len(), self.pending.len());
+        let to_transfer = min(buf.len(), self.pending.len());
         let drained : Vec<u8> = self.pending.drain(0..to_transfer).collect();
         buf[0..to_transfer].copy_from_slice(&drained[0..to_transfer]);
 
@@ -104,8 +97,8 @@ impl Buffer {
             _ => None
         };
 
-        let (bytes_sender, bytes_receiver): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel();
-        let (decoder_sender, decoder_receiver) : (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel();
+        let (bytes_sender, bytes_receiver): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = channel();
+        let (decoder_sender, decoder_receiver) : (Sender<Vec<u8>>, Receiver<Vec<u8>>) = channel();
 
         Buffer {
             id: id,
@@ -117,7 +110,7 @@ impl Buffer {
             bytes_receiver: bytes_receiver,
             encoder: Encoder::new_with_size(
                 Decoder::new_with_size(
-                    BufferReader { id: id, state: 0, name: "input reader".to_string(), receiver: decoder_receiver, consumed: 0, pending: Vec::<u8>::new() },
+                    BufferReader { name: "input reader".to_string(), receiver: decoder_receiver, pending: Vec::<u8>::new() },
                     INPUT_BUFFER_SIZE
                 ),
                 ENCODER_BUFFER_SIZE
@@ -133,7 +126,7 @@ impl Buffer {
     }
 
     fn write_bytes(&mut self, data: &[u8]) {
-        let mut sender = {
+        let sender = {
             match &self.encoding {
                 Some(encoding) => {
                     if encoding == "gzip" {
@@ -191,20 +184,14 @@ fn append(id: i64, chunk: *const c_void, size: usize) {
     };
 }
 
+/*
 fn brotli_decompress(buffer: &[u8]) -> Vec<u8> {
     let mut decompressor = brotli_decompressor::Decompressor::new(buffer, buffer.len());
     let mut decoded = Vec::new();
-    decompressor.read_to_end(&mut decoded);
+    decompressor.read_to_end(&mut decoded).unwrap();
     decoded
 }
-
-
-fn process(id: &i64, buffer: &[u8], encoding: &str) {
-    let processed = match encoding {
-        //"br" => brotli_decompress(buffer),
-        _ => buffer.to_vec(),
-    };
-}
+*/
 
 fn transform(bytes: usize, content: &mut [u8] ) -> Chunk {
     info!("Transfrn retyrubg chunk of size {}.", content.len());
@@ -235,7 +222,7 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
                                buffer.transfer_chunk = bytes;
                                return transform(buffer.transfer_chunk.len(), &mut buffer.transfer_chunk);
                            },
-                           TryRecvError => {
+                           Err(_) => {
                                warn!("Failed reading non-gzip stream");
                                return Chunk { size: 0, bytes: null() };
                            }
@@ -248,7 +235,7 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
                             buffer.transfer_chunk = bytes;
                             return transform(buffer.transfer_chunk.len(), &mut buffer.transfer_chunk);
                         },
-                        TryRecvError => {
+                        Err(_) => {
                             warn!("Failed reading non-gzip stream");
                             return Chunk { size: 0, bytes: null() };
                         }
@@ -292,17 +279,17 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
 }
 
 #[no_mangle]
-pub extern "C" fn transfer(id: i64, chunk: *const c_void, size: usize, uri: *const c_char) {
+pub extern "C" fn transfer(id: i64, chunk: *const c_void, size: usize, _uri: *const c_char) {
     append(id, chunk, size);
 }
 
 #[no_mangle]
-pub extern "C" fn commit(id: i64, content_encoding: *const c_char, uri: *const c_char) {
+pub extern "C" fn commit(_id: i64, _content_encoding: *const c_char, _uri: *const c_char) {
 }
 
 #[no_mangle]
-pub extern "C" fn header(id: i64, name: *const c_char, value: *const c_char, uri: *const c_char) {
-    let uri = unsafe {CStr::from_ptr(uri)}.to_str().unwrap().to_owned();
+pub extern "C" fn header(id: i64, name: *const c_char, value: *const c_char, _uri: *const c_char) {
+    //let uri = unsafe {CStr::from_ptr(uri)}.to_str().unwrap().to_owned();
     let name = unsafe {CStr::from_ptr(name)}.to_str().unwrap().to_owned();
     let value = unsafe {CStr::from_ptr(value)}.to_str().unwrap().to_owned();
     let buffers = get_buffers();
@@ -352,7 +339,7 @@ pub extern "C" fn init()  {
     }.unwrap();
 
     log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
-        .map(|()| log::set_max_level(LevelFilter::Info));
+        .map(|()| log::set_max_level(LevelFilter::Info)).unwrap();
 
     setup_hooks();
 }
