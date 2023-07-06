@@ -87,7 +87,7 @@ RUN sed -i '/imklog/s/^/#/' /etc/rsyslog.conf
 #ENV HEAPPROFILESIGNAL=28
 
 # gperftools heap checker configuration; note: conflicts with the heap profiler
-ENV HEAPCHECK=normal
+#ENV HEAPCHECK=normal
 
 WORKDIR $INSTALL_PATH
 ADD bin/entrypoint.sh /squid/bin/entrypoint.sh
