@@ -1,11 +1,16 @@
 
 ulimit -n 65536
+ulimit -c unlimited
+
 LOGFILE=/squid/var/logs/extended.log
+#PERFTOOLS=${PERFTOOLS:-1}
+
+echo "/tmp/coredump/core.%t.%e.%p" > /proc/sys/kernel/core_pattern
+    
+rsyslogd
 
 touch $LOGFILE
 chmod a+w $LOGFILE
-
-sleep 10  # wait for icap server to come online....
 
 if [ $VALGRIND == 1 ]
 then
@@ -18,8 +23,8 @@ then
         --show-reachable=yes \
         /squid/sbin/squid
 else
-    /squid/sbin/squid
+    /squid/sbin/squid -N &
 fi;
 
-
-tail -f $LOGFILE
+#tail -f $LOGFILE
+tail --retry -f /var/log/syslog

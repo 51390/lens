@@ -5,7 +5,7 @@ FROM ubuntu
 ARG ARCH_FLAGS
 ARG VALGRIND
 ARG VALGRIND_FLAGS
-ARG CARGO_HOME=/tmp/cargo/
+ARG CARGO_HOME
 
 ENV VALGRIND=${VALGRIND}
 ENV CARGO_HOME=${CARGO_HOME}
@@ -16,11 +16,22 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # package dependencies
 RUN apt update -y --fix-missing
-RUN apt install -y curl wget gcc g++ automake autoconf libtool openssl libssl-dev libcppunit-dev make pkg-config vim gdb zstd zlib1g-dev valgrind
+RUN apt install -y \
+    curl wget gcc g++ automake autoconf libtool openssl \
+    libssl-dev libcppunit-dev make pkg-config vim gdb zstd \
+    zlib1g-dev valgrind rsyslog build-essential \
+    google-perftools libgoogle-perftools-dev
+
+# link in gperftools
+ENV LIBS=-ltcmalloc_and_profiler
+ENV CFLAGS=-ltcmalloc_and_profiler
+ENV CXXFLAGS=-ltcmalloc_and_profiler
 
 # rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
-RUN --mount=mode=0777,type=cache,target=${CARGO_HOME},rw bash /tmp/rustup.sh -y
+RUN bash /tmp/rustup.sh -y
+RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup toolchain install nightly'
+RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup default nightly'
 
 # libecap
 ARG ECAP_BUILD_PATH=/tmp/build-ecap
@@ -67,6 +78,16 @@ ADD conf/* /squid/etc/
 RUN chmod 400 /squid/etc/bump*
 RUN /squid/libexec/security_file_certgen -c -s /squid/var/cache/squid/ssl_db -M 20MB
 RUN chmod a+w -R /squid/
+
+# syslog
+RUN sed -i '/imklog/s/^/#/' /etc/rsyslog.conf
+
+# gperftools heap profiler configuration
+#ENV HEAPPROFILE=/tmp/heap.prof
+#ENV HEAPPROFILESIGNAL=28
+
+# gperftools heap checker configuration; note: conflicts with the heap profiler
+#ENV HEAPCHECK=normal
 
 WORKDIR $INSTALL_PATH
 ADD bin/entrypoint.sh /squid/bin/entrypoint.sh

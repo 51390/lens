@@ -21,37 +21,9 @@ using libecap::size_type;
 libecap::Name headerContentEncoding("Content-Encoding", libecap::Name::NextId());
 
 typedef struct {
-    int counter;
-    void* data;
-    size_t n;
-    pthread_t thread;
-    char* uri;
-} LogOutput;
-
-
-typedef struct _BufferList {
-    void* buffer;
     size_t size;
-    struct _BufferList* next;
-} BufferList;
-
-extern "C"
-void* writeLog(void *output) {
-    LogOutput* lo = (LogOutput*)output;
-
-    char filename[8192];
-    memset(filename, 0, sizeof(filename));
-    sprintf(filename, "/tmp/request-%d.log", lo->counter);
-
-    FILE* stream = fopen(filename, "a+");
-
-    if(stream) {
-        fwrite(lo->data, sizeof(char), lo->n, stream);
-        fclose(stream);
-    }
-
-    return 0;
-}
+    const void* bytes;
+} Chunk;
 
 
 class Service: public libecap::adapter::Service {
@@ -78,9 +50,12 @@ class Service: public libecap::adapter::Service {
 		// Work
 		virtual MadeXactionPointer makeXaction(libecap::host::Xaction *hostx);
 
+        void (*init)();
         void (*transfer)(int, const void*, size_t, const char*);
         void (*commit)(int, const char*, const char*);
         void (*header)(int, const char*, const char*, const char*);
+        void (*content_done)(int);
+        Chunk (*get_content)(int);
     private:
         void * module_;
         std::string analyzerPath;
@@ -147,14 +122,13 @@ class Xaction: public libecap::adapter::Xaction {
 	private:
         void _processBuffers();
 
-		libecap::shared_ptr<const Service> service; // configuration access
+		libecap::shared_ptr<const Service> service;
         libecap::shared_ptr<libecap::Message>  adapted;
 		libecap::host::Xaction *hostx; // Host transaction rep
+        bool gzip = false;
                                 
-        FILE* chunkFile = 0;
         int id = 0;
         int contentLength = 0;
-        BufferList *bufferList, *current, *last = 0;
         char* requestUri = 0;
 
 		typedef enum { opUndecided, opOn, opComplete, opNever } OperationState;
@@ -211,9 +185,14 @@ void Adapter::Service::start() {
     module_ = dlopen(analyzerPath.c_str(), RTLD_NOW | RTLD_GLOBAL);
 
     if(module_) {
+        init = (void (*)())dlsym(module_, "init");
+        init();
+
         transfer = (void (*)(int, const void*, size_t, const char*))dlsym(module_, "transfer");
         commit = (void (*)(int, const char*, const char*))dlsym(module_, "commit");
         header = (void (*)(int, const char*, const char*, const char*))dlsym(module_, "header");
+        get_content = (Chunk (*)(int))dlsym(module_, "get_content");
+        content_done = (void (*)(int))dlsym(module_, "content_done");
     }
 }
 
@@ -245,9 +224,6 @@ Adapter::Xaction::Xaction(libecap::shared_ptr<Service> aService,
 	hostx(x),
 	receivingVb(opUndecided), sendingAb(opUndecided) {
     id = counter++;
-    current = 0;
-    bufferList = 0;
-    last = 0;
 }
 
 Adapter::Xaction::~Xaction() {
@@ -290,6 +266,16 @@ void Adapter::Xaction::start() {
         adapted->header().removeAny(libecap::headerContentLength);
     }
 
+    /*
+    if(adapted->header().hasAny(Adapter::headerContentEncoding)) {
+        libecap::Header::Value v = adapted->header().value(Adapter::headerContentEncoding);
+        if(v.toString() == "gzip") {
+            adapted->header().removeAny(Adapter::headerContentEncoding);
+            service->header(id, "Content-Encoding", "gzip", "N/A");
+        }
+    }*/
+
+
 	// add a custom header
 	static const libecap::Name name("X-Ecap");
 	const libecap::Header::Value value =
@@ -317,17 +303,6 @@ void Adapter::Xaction::stop() {
 }
 
 void Adapter::Xaction::_processBuffers() {
-    BufferList *sweeper = bufferList;
-
-    while(sweeper) {
-        BufferList* cleaner = sweeper;
-        if(cleaner->size && cleaner->buffer) {
-            free(cleaner->buffer);
-            delete(cleaner);
-        }
-        sweeper = sweeper->next;
-    }
-
     if(adapted != 0 && adapted->header().hasAny(Adapter::headerContentEncoding)) {
         libecap::Header::Value v = adapted->header().value(Adapter::headerContentEncoding);
         service->commit(id, v.start, requestUri);
@@ -353,9 +328,7 @@ void Adapter::Xaction::abMake()
 	Must(receivingVb == opOn || receivingVb == opComplete);
 	
 	sendingAb = opOn;
-    if(current) {
-        hostx->noteAbContentAvailable();
-    }
+    hostx->noteAbContentAvailable();
 }
 
 void Adapter::Xaction::abMakeMore()
@@ -371,14 +344,40 @@ void Adapter::Xaction::abStopMaking()
 	stopVb();
 }
 
+void to_file(const char* fname, int id, const char* suffix, const void* content, size_t n, bool append) {
+    /*
+    FILE *f;
+    char* filename = (char*)malloc(1024);
+    snprintf(filename, 1024, "%s-%d%s", fname, id, suffix);
+
+    if(append) {
+        f = fopen(filename, "a+");
+    } else {
+        f = fopen(filename, "w+");
+    }
+
+    fwrite(content, sizeof(char), n, f);
+
+    free(filename);
+    fclose(f);
+    */
+}
 
 libecap::Area Adapter::Xaction::abContent(size_type offset, size_type size) {
 	Must(sendingAb == opOn || sendingAb == opComplete);
-    BufferList* c =  current;
-    if(c) {
-        current = c->next;
-        return c->size ? libecap::Area::FromTempBuffer((const char*)c->buffer, c->size) : libecap::Area();
+    Chunk c = service->get_content(id);
+
+    if(c.size) {
+        libecap::Area a = libecap::Area::FromTempBuffer((const char*)c.bytes, c.size);
+        std::string data = a.toString();
+        to_file("ab-content", id, ".log", data.c_str(), data.length(), true);
+        return a;
     } else {
+        /*char z[4096];
+        memset(z, 0, sizeof(z));
+
+        libecap::Area a = libecap::Area::FromTempBuffer((const char*)z, 4096);
+        return a;*/
         return libecap::Area();
     }
 }
@@ -391,6 +390,7 @@ void Adapter::Xaction::noteVbContentDone(bool atEnd)
 {
 	Must(receivingVb == opOn);
 	stopVb();
+    service->content_done(id);
 	if (sendingAb == opOn) {
 		hostx->noteAbContentDone(atEnd);
 		sendingAb = opComplete;
@@ -412,30 +412,20 @@ void Adapter::Xaction::noteVbContentAvailable()
 
         HeaderVisitor hv(service, id, requestUri);
         adapted->header().visitEach(hv);
+
     }
 
 	const libecap::Area vb = hostx->vbContent(0, libecap::nsize); // get all vb
     
-    if(!last) {
-        bufferList = new BufferList();
-        last = bufferList;
-    } else {
-        last->next = new BufferList();
-        last = last->next;
-    }
-
-    last->next = 0;
-    last->size = vb.size;
-    last->buffer = malloc(last->size);
-    memcpy(last->buffer, vb.start, last->size);
-
-    if(!current) {
-        current = last;
-    }
-
 	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
 
-    if (last->size && last->buffer) {
+    if (vb.size && vb.start) {
+        /*char filename[1024];
+        memset(filename, 0, sizeof(filename));
+        snprintf(filename, sizeof(filename), "/tmp/vb-content-%d.log", id);
+        FILE* f = fopen(filename, "a+");
+        fwrite(vb.start, sizeof(char), vb.size, f);
+        fclose(f);*/
         service->transfer(id, vb.start, vb.size, requestUri);
     }
 
