@@ -167,9 +167,9 @@ checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 
 [[package]]
 name = "is-terminal"
-version = "0.4.8"
+version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24fddda5af7e54bf7da53067d6e802dbcc381d0a8eef629df528e3ebf68755cb"
+checksum = "cb0889898416213fab133e1d33a0e5858a48177452750691bde3666d0fdbaf8b"
 dependencies = [
  "hermit-abi",
  "rustix",
@@ -460,7 +460,7 @@ checksum = "1a515f5799fe4961cb532f983ce2b23082366b898e52ffbce459c86f67c8378a"
 [[package]]
 name = "zstream"
 version = "0.1.0"
-source = "git+https://github.com/dpereira/zstream-rs.git#3ea7a20e3cf9ab43b153a85c8b1eb0bcceebaf95"
+source = "git+https://github.com/51390/zstream-rs.git#b9284961c488111d19f1ecf6b674fa0d1509a2b3"
 dependencies = [
  "env_logger",
  "libc",
