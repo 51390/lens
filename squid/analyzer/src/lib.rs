@@ -1,30 +1,157 @@
-use flate2::read::GzDecoder;
+#![feature(panic_info_message)]
+#![feature(deadline_api)]
+
+use log::{LevelFilter, info, error};
+use std::boxed::Box;
 use std::collections::HashMap;
-use std::ffi::{
-    c_void,
-    c_char,
-    CStr
-};
-use std::fs::OpenOptions;
+use std::cmp::min;
+use std::ffi::{ c_void, c_char, CStr };
 use std::io::prelude::*;
+use std::ptr::null;
 use std::sync::Once;
-use std::thread;
 use std::vec::Vec;
+use syslog::{Logger, LoggerBackend, Facility, Formatter3164, BasicLogger};
+use std::sync::mpsc::{channel, Sender, Receiver, SendError};
+use zstream::{Encoder, Decoder};
 
 static mut BUFFERS: Option<Buffers> = None;
 static ONCE_BUFFERS: Once = Once::new();
 
-trait Instance {
-    fn new() -> Option<Buffers>;
+const INPUT_BUFFER_SIZE: usize = 32 * 1024;
+const ENCODER_BUFFER_SIZE : usize =  1024 * 1024;
+const OUTPUT_BUFFER_SIZE: usize = 1024 * 1024;
+
+trait Instance<T> {
+    fn new() -> Option<T>;
+}
+
+struct BufferReader {
+    id: i64,
+    receiver: Receiver<Vec<u8>>,
+    name: String,
+    pending: Vec<u8>,
+}
+
+struct Buffer {
+    id: i64,
+    uri: String,
+    is_done: bool,
+    encoding: Option<String>,
+    transfer_chunk: Vec<u8>,
+    bytes_total: usize,
+    bytes_sender: Sender<Vec<u8>>,
+    bytes_receiver: Receiver<Vec<u8>>,
+    encoder: Encoder,
+    decoder_sender: Sender<Vec<u8>>,
+    error: bool,
+}
+
+#[repr(C)]
+pub struct Chunk {
+    size: usize,
+    bytes: *const c_void
+}
+
+impl Read for BufferReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let pending = self.pending.len();
+        let n_data = match self.receiver.try_recv() {
+            Ok(data) => {
+                let n_data = data.len();
+                self.pending.extend(data);
+                n_data
+            },
+            Err(_) => {
+                0
+            }
+        };
+
+        let acum = self.pending.len();
+        let to_transfer = min(buf.len(), self.pending.len());
+        let drained : Vec<u8> = self.pending.drain(0..to_transfer).collect();
+        buf[0..to_transfer].copy_from_slice(&drained[0..to_transfer]);
+
+        info!(
+            "BF({}) -> {} pending; {} in; {} acum; {} transfer; {} drained; {} left.",
+            self.name, pending, n_data, acum, to_transfer, drained.len(), self.pending.len()
+        );
+
+        Ok(to_transfer)
+    }
 }
 
 struct Buffers {
-    responses: HashMap<i64, Vec<u8>>,
+    responses: HashMap<i64, Buffer>,
+    headers: HashMap<i64, HashMap<String, String>>,
 }
 
-impl Instance for Buffers {
+impl Buffer {
+    fn new(id: i64, uri: String) -> Buffer {
+        let buffers = get_buffers();
+        let encoding = match buffers.headers.get(&id) {
+            Some(headers) => {
+                headers.get("Content-Encoding")
+            },
+            _ => None
+        };
+
+        let (bytes_sender, bytes_receiver): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = channel();
+        let (decoder_sender, decoder_receiver) : (Sender<Vec<u8>>, Receiver<Vec<u8>>) = channel();
+
+        Buffer {
+            id: id,
+            uri: uri,
+            is_done: false,
+            encoding: encoding.cloned(),
+            transfer_chunk: Vec::<u8>::new(),
+            bytes_total: 0,
+            bytes_sender: bytes_sender,
+            bytes_receiver: bytes_receiver,
+            encoder: Encoder::new_with_size(
+                Decoder::new_with_size(
+                    BufferReader { id: id, name: "input reader".to_string(), receiver: decoder_receiver, pending: Vec::<u8>::new() },
+                    INPUT_BUFFER_SIZE
+                ),
+                ENCODER_BUFFER_SIZE
+            ),
+            decoder_sender: decoder_sender,
+            error: false,
+        }
+    }
+
+    fn done(&mut self) {
+        self.is_done = true;
+        info!("Transaction {} is set as done for uri: {}", self.id, self.uri);
+    }
+
+    fn write_bytes(&mut self, data: &[u8]) {
+        let sender = {
+            match &self.encoding {
+                Some(encoding) => {
+                    if encoding == "gzip" {
+                        &self.decoder_sender
+                    } else {
+                        &self.bytes_sender
+                    }
+                },
+                None => &self.bytes_sender
+            }
+        };
+
+        match sender.send(data.to_vec()) {
+            Ok(()) => {
+                self.bytes_total += data.len();
+            },
+            Err(SendError(sent)) => {
+                error!("Failed to send {} bytes", sent.len());
+            }
+        }
+    }
+}
+
+impl Instance<Buffers> for Buffers {
     fn new() -> Option<Buffers> {
-        Some(Buffers { responses: HashMap::new() })
+        Some(Buffers { responses: HashMap::new(), headers: HashMap::new() })
     }
 }
 
@@ -40,90 +167,197 @@ fn get_buffers() -> &'static mut Buffers {
     }
 }
 
-fn append(id: i64, chunk: *const c_void, size: usize) -> usize {
+fn append(id: i64, chunk: *const c_void, size: usize, uri: *const c_char) {
     let ptr = chunk as *const u8;
     let buffers = get_buffers();
-    let buffer_size;
     match buffers.responses.get_mut(&id) {
         Some(buffer) => unsafe {
-            buffer_size = buffer.len();
-            buffer.extend(std::slice::from_raw_parts(ptr, size));
+            buffer.write_bytes(std::slice::from_raw_parts(ptr, size));
         },
         None => unsafe {
-            let mut buffer = Vec::<u8>::new();
-            buffer_size = buffer.len();
-            buffer.extend(std::slice::from_raw_parts(ptr, size));
+            let uri_str = CStr::from_ptr(uri).to_str().unwrap().to_owned();
+            info!("Initializing transaction {} for {}", id, uri_str);
+            let mut buffer = Buffer::new(id, uri_str);
+            buffer.write_bytes(std::slice::from_raw_parts(ptr, size));
             drop(buffers.responses.insert(id, buffer));
         },
-    }
-    buffer_size
+    };
 }
 
+/*
 fn brotli_decompress(buffer: &[u8]) -> Vec<u8> {
     let mut decompressor = brotli_decompressor::Decompressor::new(buffer, buffer.len());
     let mut decoded = Vec::new();
-    decompressor.read_to_end(&mut decoded);
+    decompressor.read_to_end(&mut decoded).unwrap();
     decoded
 }
+*/
 
-fn gzip_decompress(buffer: &[u8]) -> Vec<u8> {
-    let mut decoder = GzDecoder::new(buffer);
-    let mut decoded = Vec::new();
-    decoder.read_to_end(&mut decoded);
-    decoded
+fn transform(bytes: usize, content: &mut [u8] ) -> Chunk {
+    Chunk {
+        size: bytes,
+        bytes: content.as_ptr() as *const c_void,
+    }
+    //Chunk { size: 0, bytes: null(), }
 }
 
-fn process(id: &i64, buffer: &[u8], encoding: &str) {
-    let processed = match encoding {
-        "gzip" => gzip_decompress(buffer),
-        "br" => brotli_decompress(buffer),
-        _ => buffer.to_vec(),
-    };
+#[no_mangle]
+pub extern "C" fn get_content(id: i64) -> Chunk {
+    const MIN : usize = 1024;
+    let buffers = get_buffers();
+    match buffers.responses.get_mut(&id) {
+        Some(buffer) => {
+            match &buffer.encoding {
+                Some(encoding) => {
+                    if encoding != "gzip" {
+                       match buffer.bytes_receiver.try_recv() {
+                           Ok(bytes) => {
+                               buffer.transfer_chunk = bytes;
+                               return transform(buffer.transfer_chunk.len(), &mut buffer.transfer_chunk);
+                           },
+                           Err(e) => {
+                               return Chunk { size: 0, bytes: null() };
+                           }
+                       }
+                    }
+                },
+                None => {
+                    match buffer.bytes_receiver.try_recv() {
+                        Ok(bytes) => {
+                            buffer.transfer_chunk = bytes;
+                            return transform(buffer.transfer_chunk.len(), &mut buffer.transfer_chunk);
+                        },
+                        Err(_) => {
+                            return Chunk { size: 0, bytes: null() };
+                        }
+                    }
+                }
+            }
 
-    let filename = format!("/tmp/processed-request-body-{}.log", id);
-    let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
-    file.expect("Unable to open file.").write_all(&processed).ok();
+            if buffer.error {
+                return Chunk {
+                    size:0, bytes: null(),
+                };
+            }
 
-    let filename = format!("/tmp/request-body-{}.log", id);
-    let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
-    let content = format!("Finished processing. Content encoding is {}.\n", encoding);
-    file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
+            let mut output_buffer : [u8; OUTPUT_BUFFER_SIZE ] = [0; OUTPUT_BUFFER_SIZE];
+            let result = {
+                if buffer.is_done {
+                    buffer.encoder.finish(&mut output_buffer)
+                } else {
+                    buffer.encoder.read(&mut output_buffer)
+                }
+            };
+
+            let bytes = match  result {
+                Ok(bytes) => { bytes },
+                Err(e) => {
+                    error!("Failed reading for id {} (uri: {}). Will return 0 bytes. Error: {}", buffer.id, buffer.uri, e);
+                    buffer.error = true;
+                    0
+                }
+            };
+
+            buffer.transfer_chunk = output_buffer[0..bytes].to_vec();
+            transform(bytes, buffer.transfer_chunk.as_mut_slice())
+        },
+        None => {
+            Chunk { size: 0, bytes: null() }
+        }
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn transfer(id: i64, chunk: *const c_void, size: usize, uri: *const c_char) {
-    let buffer_size = append(id, chunk, size);
-    let filename = format!("/tmp/request-body-{}.log", id);
-    let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
-    let content = format!("Got a chunk with size {}. Buffers has a total of {} bytes.\n", size, buffer_size);
-    file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
+    append(id, chunk, size, uri);
 }
 
 #[no_mangle]
-pub extern "C" fn commit(id: i64, content_encoding: *const c_char, uri: *const c_char) {
-    let encoding = unsafe {CStr::from_ptr(content_encoding)}.to_str().unwrap().to_owned();
-    let filename = format!("/tmp/request-body-{}.log", id);
-    let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
-    let content = format!("Finished appending, content transfer complete. Content encoding is {}.\n", encoding);
-    file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
-
+pub extern "C" fn commit(id: i64, _content_encoding: *const c_char, _uri: *const c_char) {
     let buffers = get_buffers();
-    let buffer_ref = buffers.responses.remove(&id);
-    match buffer_ref {
+    match buffers.responses.remove(&id) {
         Some(buffer) => {
-            thread::spawn(move || {process(&id, &buffer, &encoding)});
+            info!("Dropping buffer {}", buffer.id);
+            drop(buffer);
         },
-        _ => ()
+        None => {
+            info!("Buffer {} not found.", id);
+        }
+    };
+
+    match buffers.headers.remove(&id) {
+         Some(headers) => {
+            info!("Dropping headers {}", id);
+            drop(headers);
+        },
+        None => {
+            info!("Headers {} not found.", id);
+        }
     };
 }
 
 #[no_mangle]
-pub extern "C" fn header(id: i64, name: *const c_char, value: *const c_char, uri: *const c_char) {
-    let uri = unsafe {CStr::from_ptr(uri)}.to_str().unwrap().to_owned();
+pub extern "C" fn header(id: i64, name: *const c_char, value: *const c_char, _uri: *const c_char) {
+    //let uri = unsafe {CStr::from_ptr(uri)}.to_str().unwrap().to_owned();
     let name = unsafe {CStr::from_ptr(name)}.to_str().unwrap().to_owned();
     let value = unsafe {CStr::from_ptr(value)}.to_str().unwrap().to_owned();
-    let filename = format!("/tmp/request-body-{}.log", id);
-    let file = OpenOptions::new().create(true).write(true).append(true).open(filename);
-    let content = format!("HEADER {} -> {} (uri: {})\n", name, value, uri);
-    file.expect("Unable to open file.").write_all(content.as_bytes()).ok();
+    let buffers = get_buffers();
+    match buffers.headers.get_mut(&id) {
+        Some(headers) => {
+            headers.insert(name.clone(), value.clone());
+        },
+        None => {
+            let mut headers = HashMap::new();
+            headers.insert(name.clone(), value.clone());
+            buffers.headers.insert(id, headers);
+        }
+    }
+}
+
+fn setup_hooks() {
+    let panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        if let Some(message) = panic_info.message() {
+            info!("Hooked panic with massage: {}", message);
+        }
+
+        if let Some(location) = panic_info.location() {
+            info!("panic occurred in file '{}' at line {}",
+                     location.file(),
+                     location.line(),
+                     );
+        } else {
+            info!("panic occurred but can't get location information...");
+        }
+        panic_hook(panic_info);
+    }));
+}
+
+#[no_mangle]
+pub extern "C" fn init()  {
+    let formatter : Formatter3164 = Formatter3164 {
+        facility: Facility::LOG_USER,
+        hostname: None,
+        process: "analyzer".to_string(),
+        pid: 0,
+    };
+
+    let logger : Logger::<LoggerBackend, Formatter3164> = match syslog::unix(formatter) {
+        Err(e) => { println!("impossible to connect to syslog: {:?}", e); None },
+        Ok(_logger) => Some(_logger),
+    }.unwrap();
+
+    log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
+        .map(|()| log::set_max_level(LevelFilter::Info)).unwrap();
+
+    setup_hooks();
+}
+
+#[no_mangle]
+pub extern "C" fn content_done(id: i64) {
+    let buffers = get_buffers();
+    match buffers.responses.get_mut(&id) {
+        Some(buffer) => { buffer.done(); },
+        None => ()
+    }
 }
