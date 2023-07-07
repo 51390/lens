@@ -273,7 +273,27 @@ pub extern "C" fn transfer(id: i64, chunk: *const c_void, size: usize, uri: *con
 }
 
 #[no_mangle]
-pub extern "C" fn commit(_id: i64, _content_encoding: *const c_char, _uri: *const c_char) {
+pub extern "C" fn commit(id: i64, _content_encoding: *const c_char, _uri: *const c_char) {
+    let buffers = get_buffers();
+    match buffers.responses.remove(&id) {
+        Some(buffer) => {
+            info!("Dropping buffer {}", buffer.id);
+            drop(buffer);
+        },
+        None => {
+            info!("Buffer {} not found.", id);
+        }
+    };
+
+    match buffers.headers.remove(&id) {
+         Some(headers) => {
+            info!("Dropping headers {}", id);
+            drop(headers);
+        },
+        None => {
+            info!("Headers {} not found.", id);
+        }
+    };
 }
 
 #[no_mangle]
