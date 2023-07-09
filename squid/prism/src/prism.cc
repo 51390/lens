@@ -1,5 +1,6 @@
 #include <cstring>
 #include <dlfcn.h>
+#include <gperftools/heap-checker.h>
 #include <iostream>
 #include <libecap/common/autoconf.h>
 #include <libecap/common/registry.h>
@@ -121,6 +122,7 @@ class Xaction: public libecap::adapter::Xaction {
 
 	private:
         void _processBuffers();
+        void _cleanup();
 
 		libecap::shared_ptr<const Service> service;
         libecap::shared_ptr<libecap::Message>  adapted;
@@ -294,11 +296,14 @@ void Adapter::Xaction::start() {
 void Adapter::Xaction::stop() {
 	hostx = 0;
 	// the caller will delete
-
     _processBuffers();
+    _cleanup();
+}
 
+void Adapter::Xaction::_cleanup() {
     if(requestUri) {
         free(requestUri);
+        requestUri = 0;
     }
 }
 
@@ -368,10 +373,7 @@ libecap::Area Adapter::Xaction::abContent(size_type offset, size_type size) {
     Chunk c = service->get_content(id);
 
     if(c.size) {
-        libecap::Area a = libecap::Area::FromTempBuffer((const char*)c.bytes, c.size);
-        std::string data = a.toString();
-        to_file("ab-content", id, ".log", data.c_str(), data.length(), true);
-        return a;
+        return libecap::Area::FromTempBuffer((const char*)c.bytes, c.size);;
     } else {
         /*char z[4096];
         memset(z, 0, sizeof(z));
