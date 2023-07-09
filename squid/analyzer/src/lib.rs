@@ -347,8 +347,15 @@ pub extern "C" fn init()  {
         Ok(_logger) => Some(_logger),
     }.unwrap();
 
-    log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
-        .map(|()| log::set_max_level(LevelFilter::Info)).unwrap();
+    match log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
+        .map(|()| log::set_max_level(LevelFilter::Info)) {
+        Err(e) => {
+            info!("Logger initialization errored with: {}", e);
+        },
+        _ => {
+            info!("Logger initialized");
+        }
+    };
 
     setup_hooks();
 }
