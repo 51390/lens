@@ -21,7 +21,7 @@ then
         --leak-check=full \
         --leak-resolution=high \
         --show-reachable=yes \
-        /squid/sbin/squid
+        /squid/sbin/squid -N &
 else
     /squid/sbin/squid -N &
 fi;
