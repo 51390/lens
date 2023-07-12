@@ -15,7 +15,7 @@
 #include <libecap/host/xaction.h>
 #include <pthread.h>
 
-namespace Adapter { // not required, but adds clarity
+namespace Adapter {
 
 using libecap::size_type;
 
@@ -63,8 +63,6 @@ class Service: public libecap::adapter::Service {
 };
 
 
-// Calls Service::setOne() for each host-provided configuration option.
-// See Service::configure().
 class Cfgtor: public libecap::NamedValueVisitor {
 	public:
 		Cfgtor(Service &aSvc): svc(aSvc) {}
@@ -116,9 +114,8 @@ class Xaction: public libecap::adapter::Xaction {
 		virtual void noteVbContentAvailable();
 
 	protected:
-		void adaptContent(std::string &chunk) const; // converts vb to ab
-		void stopVb(); // stops receiving vb (if we are receiving it)
-		libecap::host::Xaction *lastHostCall(); // clears hostx
+		void stopVb();
+		libecap::host::Xaction *lastHostCall();
 
 	private:
         void _processBuffers();
@@ -126,16 +123,13 @@ class Xaction: public libecap::adapter::Xaction {
 
 		libecap::shared_ptr<const Service> service;
         libecap::shared_ptr<libecap::Message>  adapted;
-		libecap::host::Xaction *hostx; // Host transaction rep
-        bool gzip = false;
+		libecap::host::Xaction *hostx;
                                 
         int id = 0;
         int contentLength = 0;
         char* requestUri = 0;
 
 		typedef enum { opUndecided, opOn, opComplete, opNever } OperationState;
-		OperationState receivingVb;
-		OperationState sendingAb;
 };
 
 static const std::string CfgErrorPrefix =
@@ -182,7 +176,7 @@ void Adapter::Service::setOne(const libecap::Name &key, const libecap::Area &val
 void Adapter::Service::start() {
 	libecap::adapter::Service::start();
 
-    std::clog << "Prism starting";
+    std::clog << "Prism starting" << std::endl;
 
     module_ = dlopen(analyzerPath.c_str(), RTLD_NOW | RTLD_GLOBAL);
 
@@ -196,6 +190,8 @@ void Adapter::Service::start() {
         get_content = (Chunk (*)(int))dlsym(module_, "get_content");
         content_done = (void (*)(int))dlsym(module_, "content_done");
     }
+
+    std::clog << "Prism init OK" << std::endl;
 }
 
 void Adapter::Service::stop() {
@@ -223,8 +219,7 @@ int counter = 0;
 Adapter::Xaction::Xaction(libecap::shared_ptr<Service> aService,
 	libecap::host::Xaction *x):
 	service(aService),
-	hostx(x),
-	receivingVb(opUndecided), sendingAb(opUndecided) {
+	hostx(x) {
     id = counter++;
 }
 
@@ -234,6 +229,8 @@ Adapter::Xaction::~Xaction() {
 		x->adaptationAborted();
 	}
 
+    service->commit(id, "N/A", requestUri);
+    _cleanup();
 }
 
 const libecap::Area Adapter::Xaction::option(const libecap::Name &) const {
@@ -246,46 +243,24 @@ void Adapter::Xaction::visitEachOption(libecap::NamedValueVisitor &) const {
 
 
 void Adapter::Xaction::start() {
-	Must(hostx);
+    if(!hostx) {
+        return;
+    }
 	if (hostx->virgin().body()) {
-		receivingVb = opOn;
-		hostx->vbMake(); // ask host to supply virgin body
-	} else {
-		// we are not interested in vb if there is not one
-		receivingVb = opNever;
+		hostx->vbMake(); 
 	}
 
-	/* adapt message header */
-
 	adapted = hostx->virgin().clone();
-	Must(adapted != 0);
+
+    if(!adapted) {
+        return;
+    }
 
     if(adapted->header().hasAny(libecap::headerContentLength)) {
-        libecap::Header::Value v = adapted->header().value(libecap::headerContentLength);
-        contentLength = std::stoi(v.toString());
-        // delete ContentLength header because we may change the length
-        // unknown length may have performance implications for the host
         adapted->header().removeAny(libecap::headerContentLength);
     }
 
-    /*
-    if(adapted->header().hasAny(Adapter::headerContentEncoding)) {
-        libecap::Header::Value v = adapted->header().value(Adapter::headerContentEncoding);
-        if(v.toString() == "gzip") {
-            adapted->header().removeAny(Adapter::headerContentEncoding);
-            service->header(id, "Content-Encoding", "gzip", "N/A");
-        }
-    }*/
-
-
-	// add a custom header
-	static const libecap::Name name("X-Ecap");
-	const libecap::Header::Value value =
-		libecap::Area::FromTempString(libecap::MyHost().uri());
-	adapted->header().add(name, value);
-
 	if (!adapted->body()) {
-		sendingAb = opNever; // there is nothing to send
 		lastHostCall()->useAdapted(adapted);
 	} else {
 		hostx->useAdapted(adapted);
@@ -296,7 +271,7 @@ void Adapter::Xaction::start() {
 void Adapter::Xaction::stop() {
 	hostx = 0;
 	// the caller will delete
-    _processBuffers();
+    service->commit(id, "N/A", requestUri);
     _cleanup();
 }
 
@@ -307,45 +282,23 @@ void Adapter::Xaction::_cleanup() {
     }
 }
 
-void Adapter::Xaction::_processBuffers() {
-    if(adapted != 0 && adapted->header().hasAny(Adapter::headerContentEncoding)) {
-        libecap::Header::Value v = adapted->header().value(Adapter::headerContentEncoding);
-        service->commit(id, v.start, requestUri);
-    } else {
-        service->commit(id, "N/A", requestUri);
-    }
-}
-
 void Adapter::Xaction::abDiscard()
 {
-	Must(sendingAb == opUndecided); // have not started yet
-	sendingAb = opNever;
-	// we do not need more vb if the host is not interested in ab
 	stopVb();
 }
 
 void Adapter::Xaction::abMake()
 {
-	Must(sendingAb == opUndecided); // have not yet started or decided not to send
-	Must(hostx->virgin().body()); // that is our only source of ab content
-
-	// we are or were receiving vb
-	Must(receivingVb == opOn || receivingVb == opComplete);
-	
-	sendingAb = opOn;
     hostx->noteAbContentAvailable();
 }
 
 void Adapter::Xaction::abMakeMore()
 {
-	Must(receivingVb == opOn); // a precondition for receiving more vb
 	hostx->vbMakeMore();
 }
 
 void Adapter::Xaction::abStopMaking()
 {
-	sendingAb = opComplete;
-	// we do not need more vb if the host is not interested in more ab
 	stopVb();
 }
 
@@ -369,7 +322,6 @@ void to_file(const char* fname, int id, const char* suffix, const void* content,
 }
 
 libecap::Area Adapter::Xaction::abContent(size_type offset, size_type size) {
-	Must(sendingAb == opOn || sendingAb == opComplete);
     Chunk c = service->get_content(id);
 
     if(c.size) {
@@ -385,23 +337,17 @@ libecap::Area Adapter::Xaction::abContent(size_type offset, size_type size) {
 }
 
 void Adapter::Xaction::abContentShift(size_type size) {
-	Must(sendingAb == opOn || sendingAb == opComplete);
 }
 
 void Adapter::Xaction::noteVbContentDone(bool atEnd)
 {
-	Must(receivingVb == opOn);
 	stopVb();
     service->content_done(id);
-	if (sendingAb == opOn) {
-		hostx->noteAbContentDone(atEnd);
-		sendingAb = opComplete;
-	}
+    hostx->noteAbContentDone(atEnd);
 }
 
 void Adapter::Xaction::noteVbContentAvailable()
 {
-	Must(receivingVb == opOn);
 
     if(!requestUri) {
         // grab the request uri
@@ -422,32 +368,15 @@ void Adapter::Xaction::noteVbContentAvailable()
 	hostx->vbContentShift(vb.size); // we have a copy; do not need vb any more
 
     if (vb.size && vb.start) {
-        /*char filename[1024];
-        memset(filename, 0, sizeof(filename));
-        snprintf(filename, sizeof(filename), "/tmp/vb-content-%d.log", id);
-        FILE* f = fopen(filename, "a+");
-        fwrite(vb.start, sizeof(char), vb.size, f);
-        fclose(f);*/
         service->transfer(id, vb.start, vb.size, requestUri);
+        hostx->noteAbContentAvailable();
     }
-
-	if (sendingAb == opOn)
-		hostx->noteAbContentAvailable();
-}
-
-void Adapter::Xaction::adaptContent(std::string &chunk) const {
 }
 
 // tells the host that we are not interested in [more] vb
 // if the host does not know that already
 void Adapter::Xaction::stopVb() {
-	if (receivingVb == opOn) {
-		hostx->vbStopMaking(); // we will not call vbContent() any more
-		receivingVb = opComplete;
-	} else {
-		// we already got the entire body or refused it earlier
-		Must(receivingVb != opUndecided);
-	}
+    hostx->vbStopMaking(); // we will not call vbContent() any more
 }
 
 // this method is used to make the last call to hostx transaction
@@ -455,7 +384,6 @@ void Adapter::Xaction::stopVb() {
 // TODO: replace with hostx-independent "done" method
 libecap::host::Xaction *Adapter::Xaction::lastHostCall() {
 	libecap::host::Xaction *x = hostx;
-	Must(x);
 	hostx = 0;
 	return x;
 }
