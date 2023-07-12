@@ -20,7 +20,7 @@ RUN apt install -y \
     curl wget gcc g++ automake autoconf libtool openssl \
     libssl-dev libcppunit-dev make pkg-config vim gdb zstd \
     zlib1g-dev valgrind rsyslog build-essential \
-    google-perftools libgoogle-perftools-dev
+    google-perftools libgoogle-perftools-dev smem
 
 # link in gperftools
 ENV LIBS=-ltcmalloc_and_profiler
@@ -30,8 +30,8 @@ ENV CXXFLAGS=-ltcmalloc_and_profiler
 # rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
 RUN bash /tmp/rustup.sh -y
-RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup toolchain install nightly'
-RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup default nightly'
+RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup toolchain install stable'
+RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup default stable'
 
 # libecap
 ARG ECAP_BUILD_PATH=/tmp/build-ecap
@@ -70,7 +70,6 @@ RUN ldconfig
 ARG ANALYZER_BUILD_PATH=/tmp/analyzer/
 ADD analyzer $ANALYZER_BUILD_PATH
 WORKDIR $ANALYZER_BUILD_PATH
-RUN echo 8
 RUN PATH=$PATH:${CARGO_HOME}/bin make build
 
 # squid config
