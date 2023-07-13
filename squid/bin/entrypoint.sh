@@ -17,6 +17,8 @@ then
     valgrind -v \
         --trace-children=yes \
         --num-callers=50 \
+        --xml=yes \
+        --xml-file=/tmp/valgrind-%p.xml \
         --log-file=/tmp/valgrind-%p.log \
         --leak-check=full \
         --leak-resolution=high \
