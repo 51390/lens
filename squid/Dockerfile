@@ -1,6 +1,6 @@
 # syntax = docker/dockerfile:1.2
 
-FROM ubuntu
+FROM ecap-stream
 
 ARG ARCH_FLAGS
 ARG VALGRIND
@@ -33,16 +33,6 @@ RUN bash /tmp/rustup.sh -y
 RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup toolchain install stable'
 RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup default stable'
 
-# libecap
-ARG ECAP_BUILD_PATH=/tmp/build-ecap
-RUN mkdir $ECAP_BUILD_PATH
-WORKDIR $ECAP_BUILD_PATH
-RUN wget https://www.e-cap.org/archive/libecap-1.0.0.tar.gz
-RUN tar xvpfz libecap-1.0.0.tar.gz
-WORKDIR $ECAP_BUILD_PATH/libecap-1.0.0
-RUN ./configure ${ARCH_FLAGS} && make && make install
-RUN ldconfig
-
 # squid
 ARG BUILD_PATH=/tmp/build
 ARG INSTALL_PATH=/squid
@@ -55,16 +45,6 @@ RUN bash bootstrap.sh
 RUN ./configure ${VALGRIND_FLAGS} --disable-dependency-tracking --enable-ssl-crtd --with-openssl --disable-strict-error-checking --enable-ecap --prefix=$INSTALL_PATH $ARCH_FLAGS
 RUN make
 RUN make install
-
-# prism
-ARG PRISM_BUILD_PATH=/tmp/prism
-ADD prism $PRISM_BUILD_PATH
-WORKDIR $PRISM_BUILD_PATH
-RUN bash bootstrap.sh
-RUN ./configure
-RUN make
-RUN make install
-RUN ldconfig
 
 # analyzer
 ARG ANALYZER_BUILD_PATH=/tmp/analyzer/

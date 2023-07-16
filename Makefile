@@ -7,7 +7,7 @@ ARCH_FLAGS:=$(shell test $(PLATFORM) = 'Darwin' && echo '--build=aarch64-unknown
 VALGRIND ?= 0
 VALGRIND_FLAGS:=$(shell test $(VALGRIND) == 1 && echo '"--with-valgrind-debug --disable-optimizations"')
 
-build:
+build: build-ecap-stream
 	COMPOSE_DOCKER_CLI_BUILD=1 \
 	DOCKER_BUILDKIT=1 \
 	BIND_SOURCE=$(BIND_SOURCE) \
@@ -15,6 +15,11 @@ build:
 		--build-arg ARCH_FLAGS=$(ARCH_FLAGS) \
 		--build-arg VALGRIND_FLAGS=$(VALGRIND_FLAGS) \
 		--build-arg VALGRIND=$(VALGRIND)
+
+build-ecap-stream:
+	git submodule update --init
+	docker build -t ecap-stream ecap-stream
+
 
 start:
 	BIND_SOURCE=$(BIND_SOURCE) docker compose up
