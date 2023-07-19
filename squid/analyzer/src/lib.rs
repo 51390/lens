@@ -80,6 +80,7 @@ impl Read for BufferReader {
 struct Buffers {
     responses: HashMap<i64, Buffer>,
     headers: HashMap<i64, HashMap<String, String>>,
+    uris: HashMap<i64, String>,
 }
 
 impl Buffer {
@@ -148,7 +149,7 @@ impl Buffer {
 
 impl Instance<Buffers> for Buffers {
     fn new() -> Option<Buffers> {
-        Some(Buffers { responses: HashMap::new(), headers: HashMap::new() })
+        Some(Buffers { responses: HashMap::new(), headers: HashMap::new() , uris: HashMap::new()})
     }
 }
 
@@ -164,19 +165,15 @@ fn get_buffers() -> &'static mut Buffers {
     }
 }
 
-fn append(id: i64, chunk: *const c_void, size: usize, uri: *const c_char) {
+fn append(id: i64, chunk: *const c_void, size: usize) {
     let ptr = chunk as *const u8;
     let buffers = get_buffers();
     match buffers.responses.get_mut(&id) {
         Some(buffer) => unsafe {
             buffer.write_bytes(std::slice::from_raw_parts(ptr, size));
         },
-        None => unsafe {
-            let uri_str = CStr::from_ptr(uri).to_str().unwrap().to_owned();
-            info!("Initializing transaction {} for {}", id, uri_str);
-            let mut buffer = Buffer::new(id, uri_str);
-            buffer.write_bytes(std::slice::from_raw_parts(ptr, size));
-            drop(buffers.responses.insert(id, buffer));
+        None => {
+            panic!("Unexpected condition: asking to transfer data to uninitialized transaction with id {}", id);
         },
     };
 }
@@ -199,7 +196,16 @@ fn transform(bytes: usize, content: &mut [u8] ) -> Chunk {
 }
 
 #[no_mangle]
-pub extern "C" fn get_content(id: i64) -> Chunk {
+pub extern "C" fn uri(id: i64, uri_str: *const c_char) {
+    let uri = unsafe {CStr::from_ptr(uri_str)}.to_str().unwrap().to_owned();
+    let buffers = get_buffers();
+    buffers.responses.insert(id, Buffer::new(id, uri.to_string()));
+
+    info!("Transaction {} initialized for uri {}", id, uri);
+}
+
+#[no_mangle]
+pub extern "C" fn send(id: i64, _offset: usize, _size: usize) -> Chunk {
     const MIN : usize = 1024;
     let buffers = get_buffers();
     match buffers.responses.get_mut(&id) {
@@ -265,12 +271,12 @@ pub extern "C" fn get_content(id: i64) -> Chunk {
 }
 
 #[no_mangle]
-pub extern "C" fn transfer(id: i64, chunk: *const c_void, size: usize, uri: *const c_char) {
-    append(id, chunk, size, uri);
+pub extern "C" fn receive(id: i64, chunk: *const c_void, size: usize) {
+    append(id, chunk, size);
 }
 
 #[no_mangle]
-pub extern "C" fn commit(id: i64, _content_encoding: *const c_char, _uri: *const c_char) {
+pub extern "C" fn cleanup(id: i64) {
     let buffers = get_buffers();
     info!("{}&{} transactions currently active.", buffers.responses.len(), buffers.headers.len());
     match buffers.responses.remove(&id) {
@@ -292,14 +298,24 @@ pub extern "C" fn commit(id: i64, _content_encoding: *const c_char, _uri: *const
             info!("Headers {} not found.", id);
         }
     };
+
+    match buffers.uris.remove(&id) {
+         Some(uris) => {
+            info!("Dropping uri {}", id);
+            drop(uris);
+        },
+        None => {
+            info!("Uri {} not found.", id);
+        }
+    };
+
     info!("{} & {} transactions currently active. Capacities @ {} & {}",
       buffers.responses.len(), buffers.headers.len(), buffers.responses.capacity(), buffers.headers.capacity(),
     );
 }
 
 #[no_mangle]
-pub extern "C" fn header(id: i64, name: *const c_char, value: *const c_char, _uri: *const c_char) {
-    //let uri = unsafe {CStr::from_ptr(uri)}.to_str().unwrap().to_owned();
+pub extern "C" fn header(id: i64, name: *const c_char, value: *const c_char) {
     let name = unsafe {CStr::from_ptr(name)}.to_str().unwrap().to_owned();
     let value = unsafe {CStr::from_ptr(value)}.to_str().unwrap().to_owned();
     let buffers = get_buffers();
@@ -362,7 +378,7 @@ pub extern "C" fn init()  {
 }
 
 #[no_mangle]
-pub extern "C" fn content_done(id: i64) {
+pub extern "C" fn done(id: i64) {
     let buffers = get_buffers();
     match buffers.responses.get_mut(&id) {
         Some(buffer) => { buffer.done(); },
