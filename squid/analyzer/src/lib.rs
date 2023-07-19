@@ -1,6 +1,3 @@
-#![feature(panic_info_message)]
-#![feature(deadline_api)]
-
 use log::{LevelFilter, info, error};
 use std::boxed::Box;
 use std::collections::HashMap;
@@ -71,10 +68,10 @@ impl Read for BufferReader {
         let drained : Vec<u8> = self.pending.drain(0..to_transfer).collect();
         buf[0..to_transfer].copy_from_slice(&drained[0..to_transfer]);
 
-        info!(
+        /*info!(
             "BF({}) -> {} pending; {} in; {} acum; {} transfer; {} drained; {} left.",
             self.name, pending, n_data, acum, to_transfer, drained.len(), self.pending.len()
-        );
+        );A*/
 
         Ok(to_transfer)
     }
@@ -275,6 +272,7 @@ pub extern "C" fn transfer(id: i64, chunk: *const c_void, size: usize, uri: *con
 #[no_mangle]
 pub extern "C" fn commit(id: i64, _content_encoding: *const c_char, _uri: *const c_char) {
     let buffers = get_buffers();
+    info!("{}&{} transactions currently active.", buffers.responses.len(), buffers.headers.len());
     match buffers.responses.remove(&id) {
         Some(buffer) => {
             info!("Dropping buffer {}", buffer.id);
@@ -294,6 +292,9 @@ pub extern "C" fn commit(id: i64, _content_encoding: *const c_char, _uri: *const
             info!("Headers {} not found.", id);
         }
     };
+    info!("{} & {} transactions currently active. Capacities @ {} & {}",
+      buffers.responses.len(), buffers.headers.len(), buffers.responses.capacity(), buffers.headers.capacity(),
+    );
 }
 
 #[no_mangle]
@@ -317,7 +318,7 @@ pub extern "C" fn header(id: i64, name: *const c_char, value: *const c_char, _ur
 fn setup_hooks() {
     let panic_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
-        if let Some(message) = panic_info.message() {
+        if let Some(message) = panic_info.payload().downcast_ref::<&str>() {
             info!("Hooked panic with massage: {}", message);
         }
 

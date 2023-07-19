@@ -1,0 +1,3 @@
+[submodule "ecap-stream"]
+	path = ecap-stream
+	url = git@github.com:51390/ecap-stream.git
