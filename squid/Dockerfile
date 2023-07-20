@@ -23,9 +23,9 @@ RUN apt update -y --fix-missing; \
     google-perftools libgoogle-perftools-dev smem
 
 # link in gperftools
-ENV LIBS=-ltcmalloc_and_profiler
-ENV CFLAGS=-ltcmalloc_and_profiler
-ENV CXXFLAGS=-ltcmalloc_and_profiler
+#ENV LIBS=-ltcmalloc_and_profiler
+#ENV CFLAGS=-ltcmalloc_and_profiler
+#ENV CXXFLAGS=-ltcmalloc_and_profiler
 
 # rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
