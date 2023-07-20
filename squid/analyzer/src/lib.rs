@@ -58,9 +58,7 @@ impl Read for BufferReader {
                 self.pending.extend(data);
                 n_data
             },
-            Err(_) => {
-                0
-            }
+            Err(_) => 0,
         };
 
         let acum = self.pending.len();
