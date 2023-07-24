@@ -1,6 +1,6 @@
 # syntax = docker/dockerfile:1.2
 
-FROM ecap-stream
+FROM ubuntu
 
 ARG ARCH_FLAGS
 ARG VALGRIND
@@ -18,20 +18,23 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 RUN apt update -y --fix-missing; \
     apt install -y \
     curl wget gcc g++ automake autoconf libtool openssl \
-    libssl-dev libcppunit-dev make pkg-config vim gdb zstd \
-    zlib1g-dev valgrind rsyslog build-essential \
-    google-perftools libgoogle-perftools-dev smem
+    libssl-dev libcppunit-dev make pkg-config build-essential
 
-# link in gperftools
-#ENV LIBS=-ltcmalloc_and_profiler
-#ENV CFLAGS=-ltcmalloc_and_profiler
-#ENV CXXFLAGS=-ltcmalloc_and_profiler
+# arch flags
+ARG BUILD_ROOT=/build
+ARG ARCH_SCRIPT=$BUILD_ROOT/arch.sh
+RUN mkdir $BUILD_ROOT
+RUN echo 'test $(uname -i) = "aarch64" && echo -n "--build=aarch64-unknown-linux-gnu"' > $ARCH_SCRIPT
 
-# rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
-RUN bash /tmp/rustup.sh -y
-RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup toolchain install stable'
-RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup default stable'
+# libecap
+ARG ECAP_BUILD_PATH=$BUILD_ROOT/ecap
+RUN mkdir $ECAP_BUILD_PATH
+WORKDIR $ECAP_BUILD_PATH
+RUN wget https://www.e-cap.org/archive/libecap-1.0.0.tar.gz
+RUN tar xvpfz libecap-1.0.0.tar.gz
+WORKDIR $ECAP_BUILD_PATH/libecap-1.0.0
+RUN ./configure `bash $ARCH_SCRIPT`  && make && make install
+RUN ldconfig
 
 # squid
 ARG BUILD_PATH=/tmp/build
@@ -45,6 +48,20 @@ RUN bash bootstrap.sh
 RUN ./configure ${VALGRIND_FLAGS} --disable-dependency-tracking --enable-ssl-crtd --with-openssl --disable-strict-error-checking --enable-ecap --prefix=$INSTALL_PATH $ARCH_FLAGS
 RUN make
 RUN make install
+
+FROM ecap-stream
+COPY --from=0 /squid /squid
+
+RUN apt update -y --fix-missing; \
+    apt install -y \
+    vim gdb zstd zlib1g-dev valgrind rsyslog smem \
+    curl wget
+
+# rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
+RUN bash /tmp/rustup.sh -y
+RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup toolchain install stable'
+RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup default stable'
 
 # analyzer
 ARG ANALYZER_BUILD_PATH=/tmp/analyzer/
