@@ -78,7 +78,6 @@ impl Read for BufferReader {
 struct Buffers {
     responses: HashMap<i64, Buffer>,
     headers: HashMap<i64, HashMap<String, String>>,
-    uris: HashMap<i64, String>,
 }
 
 impl Buffer {
@@ -147,7 +146,7 @@ impl Buffer {
 
 impl Instance<Buffers> for Buffers {
     fn new() -> Option<Buffers> {
-        Some(Buffers { responses: HashMap::new(), headers: HashMap::new() , uris: HashMap::new()})
+        Some(Buffers { responses: HashMap::new(), headers: HashMap::new() })
     }
 }
 
@@ -276,35 +275,18 @@ pub extern "C" fn receive(id: i64, chunk: *const c_void, size: usize) {
 #[no_mangle]
 pub extern "C" fn cleanup(id: i64) {
     let buffers = get_buffers();
-    info!("{}&{} transactions currently active.", buffers.responses.len(), buffers.headers.len());
     match buffers.responses.remove(&id) {
         Some(buffer) => {
-            info!("Dropping buffer {}", buffer.id);
             drop(buffer);
         },
-        None => {
-            info!("Buffer {} not found.", id);
-        }
+        None => (),
     };
 
     match buffers.headers.remove(&id) {
          Some(headers) => {
-            info!("Dropping headers {}", id);
             drop(headers);
         },
-        None => {
-            info!("Headers {} not found.", id);
-        }
-    };
-
-    match buffers.uris.remove(&id) {
-         Some(uris) => {
-            info!("Dropping uri {}", id);
-            drop(uris);
-        },
-        None => {
-            info!("Uri {} not found.", id);
-        }
+        None => (),
     };
 
     info!("{} & {} transactions currently active. Capacities @ {} & {}",
