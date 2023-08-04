@@ -102,8 +102,9 @@ fn transform(bytes: usize, content: &mut [u8] ) -> Chunk {
 }
 
 #[no_mangle]
-pub extern "C" fn uri(id: i64, uri_str: *const c_char, mode: i64) {
+pub extern "C" fn uri(id: i64, uri_str: *const c_char, mode: i64, method_str: *const c_char) {
     let uri = unsafe {CStr::from_ptr(uri_str)}.to_str().unwrap().to_owned();
+    let method = unsafe {CStr::from_ptr(method_str)}.to_str().unwrap().to_owned();
     let buffers = get_buffers();
     let encoding = match buffers.headers.get(&id) {
         Some(headers) => headers.get("Content-Encoding"),
@@ -111,7 +112,7 @@ pub extern "C" fn uri(id: i64, uri_str: *const c_char, mode: i64) {
     };
     buffers.responses.insert(id, Buffer::new(id, uri.to_string(), encoding));
 
-    info!("Transaction {} initialized with mode {} for uri {}", id, Mode::from(mode), uri);
+    info!("Transaction {} initialized with mode {} for {} uri {}", id, Mode::from(mode), method, uri);
 }
 
 #[no_mangle]
