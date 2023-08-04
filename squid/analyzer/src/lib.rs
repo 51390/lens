@@ -1,46 +1,45 @@
+mod mode;
+mod buffer;
+
+use mode::Mode;
+use buffer::Buffer;
+
 use log::{LevelFilter, info, error};
 use std::boxed::Box;
 use std::collections::HashMap;
-use std::cmp::min;
-use std::ffi::{ c_void, c_char, CStr };
+use std::convert::From;
+use std::ffi::{c_void, c_char, CStr};
 use std::io::prelude::*;
 use std::ptr::null;
 use std::sync::Once;
-use std::vec::Vec;
 use syslog::{Logger, LoggerBackend, Facility, Formatter3164, BasicLogger};
-use std::sync::mpsc::{channel, Sender, Receiver, SendError};
-use zstream::{Encoder, Decoder};
 
 static mut BUFFERS: Option<Buffers> = None;
 static ONCE_BUFFERS: Once = Once::new();
 
-const INPUT_BUFFER_SIZE: usize = 32 * 1024;
-const ENCODER_BUFFER_SIZE : usize =  1024 * 1024;
 const OUTPUT_BUFFER_SIZE: usize = 1024 * 1024;
+
+fn setup_hooks() {
+    let panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        if let Some(message) = panic_info.payload().downcast_ref::<&str>() {
+            info!("Hooked panic with massage: {}", message);
+        }
+
+        if let Some(location) = panic_info.location() {
+            info!("panic occurred in file '{}' at line {}",
+                     location.file(),
+                     location.line(),
+                     );
+        } else {
+            info!("panic occurred but can't get location information...");
+        }
+        panic_hook(panic_info);
+    }));
+}
 
 trait Instance<T> {
     fn new() -> Option<T>;
-}
-
-struct BufferReader {
-    id: i64,
-    receiver: Receiver<Vec<u8>>,
-    name: String,
-    pending: Vec<u8>,
-}
-
-struct Buffer {
-    id: i64,
-    uri: String,
-    is_done: bool,
-    encoding: Option<String>,
-    transfer_chunk: Vec<u8>,
-    bytes_total: usize,
-    bytes_sender: Sender<Vec<u8>>,
-    bytes_receiver: Receiver<Vec<u8>>,
-    encoder: Encoder,
-    decoder_sender: Sender<Vec<u8>>,
-    error: bool,
 }
 
 #[repr(C)]
@@ -49,105 +48,14 @@ pub struct Chunk {
     bytes: *const c_void
 }
 
-impl Read for BufferReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let pending = self.pending.len();
-        let n_data = match self.receiver.try_recv() {
-            Ok(data) => {
-                let n_data = data.len();
-                self.pending.extend(data);
-                n_data
-            },
-            Err(_) => 0,
-        };
-
-        let acum = self.pending.len();
-        let to_transfer = min(buf.len(), self.pending.len());
-        let drained : Vec<u8> = self.pending.drain(0..to_transfer).collect();
-        buf[0..to_transfer].copy_from_slice(&drained[0..to_transfer]);
-
-        /*info!(
-            "BF({}) -> {} pending; {} in; {} acum; {} transfer; {} drained; {} left.",
-            self.name, pending, n_data, acum, to_transfer, drained.len(), self.pending.len()
-        );A*/
-
-        Ok(to_transfer)
-    }
-}
-
 struct Buffers {
     responses: HashMap<i64, Buffer>,
     headers: HashMap<i64, HashMap<String, String>>,
-    uris: HashMap<i64, String>,
-}
-
-impl Buffer {
-    fn new(id: i64, uri: String) -> Buffer {
-        let buffers = get_buffers();
-        let encoding = match buffers.headers.get(&id) {
-            Some(headers) => {
-                headers.get("Content-Encoding")
-            },
-            _ => None
-        };
-
-        let (bytes_sender, bytes_receiver): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = channel();
-        let (decoder_sender, decoder_receiver) : (Sender<Vec<u8>>, Receiver<Vec<u8>>) = channel();
-
-        Buffer {
-            id: id,
-            uri: uri,
-            is_done: false,
-            encoding: encoding.cloned(),
-            transfer_chunk: Vec::<u8>::new(),
-            bytes_total: 0,
-            bytes_sender: bytes_sender,
-            bytes_receiver: bytes_receiver,
-            encoder: Encoder::new_with_size(
-                Decoder::new_with_size(
-                    BufferReader { id: id, name: "input reader".to_string(), receiver: decoder_receiver, pending: Vec::<u8>::new() },
-                    INPUT_BUFFER_SIZE
-                ),
-                ENCODER_BUFFER_SIZE
-            ),
-            decoder_sender: decoder_sender,
-            error: false,
-        }
-    }
-
-    fn done(&mut self) {
-        self.is_done = true;
-        info!("Transaction {} is set as done for uri: {}", self.id, self.uri);
-    }
-
-    fn write_bytes(&mut self, data: &[u8]) {
-        let sender = {
-            match &self.encoding {
-                Some(encoding) => {
-                    if encoding == "gzip" {
-                        &self.decoder_sender
-                    } else {
-                        &self.bytes_sender
-                    }
-                },
-                None => &self.bytes_sender
-            }
-        };
-
-        match sender.send(data.to_vec()) {
-            Ok(()) => {
-                self.bytes_total += data.len();
-            },
-            Err(SendError(sent)) => {
-                error!("Failed to send {} bytes", sent.len());
-            }
-        }
-    }
 }
 
 impl Instance<Buffers> for Buffers {
     fn new() -> Option<Buffers> {
-        Some(Buffers { responses: HashMap::new(), headers: HashMap::new() , uris: HashMap::new()})
+        Some(Buffers { responses: HashMap::new(), headers: HashMap::new() })
     }
 }
 
@@ -194,17 +102,22 @@ fn transform(bytes: usize, content: &mut [u8] ) -> Chunk {
 }
 
 #[no_mangle]
-pub extern "C" fn uri(id: i64, uri_str: *const c_char) {
+pub extern "C" fn uri(id: i64, uri_str: *const c_char, mode: i64, method_str: *const c_char) {
     let uri = unsafe {CStr::from_ptr(uri_str)}.to_str().unwrap().to_owned();
+    let method = unsafe {CStr::from_ptr(method_str)}.to_str().unwrap().to_owned();
     let buffers = get_buffers();
-    buffers.responses.insert(id, Buffer::new(id, uri.to_string()));
+    let encoding = match buffers.headers.get(&id) {
+        Some(headers) => headers.get("Content-Encoding"),
+        _ => None,
+    };
+    buffers.responses.insert(id, Buffer::new(id, uri.to_string(), encoding));
 
-    info!("Transaction {} initialized for uri {}", id, uri);
+    info!("Transaction {} initialized with mode {} for {} uri {}", id, Mode::from(mode), method, uri);
 }
 
 #[no_mangle]
 pub extern "C" fn send(id: i64, _offset: usize, _size: usize) -> Chunk {
-    const MIN : usize = 1024;
+    //const MIN : usize = 1024;
     let buffers = get_buffers();
     match buffers.responses.get_mut(&id) {
         Some(buffer) => {
@@ -216,7 +129,7 @@ pub extern "C" fn send(id: i64, _offset: usize, _size: usize) -> Chunk {
                                buffer.transfer_chunk = bytes;
                                return transform(buffer.transfer_chunk.len(), &mut buffer.transfer_chunk);
                            },
-                           Err(e) => {
+                           Err(_) => {
                                return Chunk { size: 0, bytes: null() };
                            }
                        }
@@ -276,35 +189,18 @@ pub extern "C" fn receive(id: i64, chunk: *const c_void, size: usize) {
 #[no_mangle]
 pub extern "C" fn cleanup(id: i64) {
     let buffers = get_buffers();
-    info!("{}&{} transactions currently active.", buffers.responses.len(), buffers.headers.len());
     match buffers.responses.remove(&id) {
         Some(buffer) => {
-            info!("Dropping buffer {}", buffer.id);
             drop(buffer);
         },
-        None => {
-            info!("Buffer {} not found.", id);
-        }
+        None => (),
     };
 
     match buffers.headers.remove(&id) {
          Some(headers) => {
-            info!("Dropping headers {}", id);
             drop(headers);
         },
-        None => {
-            info!("Headers {} not found.", id);
-        }
-    };
-
-    match buffers.uris.remove(&id) {
-         Some(uris) => {
-            info!("Dropping uri {}", id);
-            drop(uris);
-        },
-        None => {
-            info!("Uri {} not found.", id);
-        }
+        None => (),
     };
 
     info!("{} & {} transactions currently active. Capacities @ {} & {}",
@@ -327,25 +223,6 @@ pub extern "C" fn header(id: i64, name: *const c_char, value: *const c_char) {
             buffers.headers.insert(id, headers);
         }
     }
-}
-
-fn setup_hooks() {
-    let panic_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
-        if let Some(message) = panic_info.payload().downcast_ref::<&str>() {
-            info!("Hooked panic with massage: {}", message);
-        }
-
-        if let Some(location) = panic_info.location() {
-            info!("panic occurred in file '{}' at line {}",
-                     location.file(),
-                     location.line(),
-                     );
-        } else {
-            info!("panic occurred but can't get location information...");
-        }
-        panic_hook(panic_info);
-    }));
 }
 
 #[no_mangle]
