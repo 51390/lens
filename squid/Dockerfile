@@ -49,25 +49,15 @@ RUN ./configure ${VALGRIND_FLAGS} --disable-dependency-tracking --enable-ssl-crt
 RUN make
 RUN make install
 
+FROM prism
 FROM ecap-stream
 COPY --from=0 /squid /squid
+COPY --from=1 /prism /prism
 
 RUN apt update -y --fix-missing; \
     apt install -y \
     vim gdb zstd zlib1g-dev valgrind rsyslog smem \
     curl wget
-
-# rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
-RUN bash /tmp/rustup.sh -y
-RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup toolchain install stable'
-RUN bash -c 'PATH="$HOME/.cargo/bin:$PATH" rustup default stable'
-
-# analyzer
-ARG ANALYZER_BUILD_PATH=/tmp/analyzer/
-ADD analyzer $ANALYZER_BUILD_PATH
-WORKDIR $ANALYZER_BUILD_PATH
-RUN PATH=$PATH:${CARGO_HOME}/bin make build
 
 # squid config
 ADD conf/* /squid/etc/
