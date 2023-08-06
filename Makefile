@@ -33,3 +33,6 @@ stop:
 down:
 	BIND_SOURCE=$(BIND_SOURCE) docker compose down
 
+extract-certificate:
+	BIND_SOURCE=$(BIND_SOURCE) docker compose up -d
+	docker cp lens-proxy-1:/squid/etc/bump.crt /tmp/
