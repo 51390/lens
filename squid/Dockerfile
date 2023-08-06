@@ -47,6 +47,11 @@ RUN ./configure ${VALGRIND_FLAGS} --disable-dependency-tracking --enable-ssl-crt
 RUN make
 RUN make install
 
+# squid certificates (ssl-bump)
+ARG CONFIG_PATH=$INSTALL_PATH/etc
+RUN openssl dhparam -outform PEM -out $CONFIG_PATH/bump_dhparam.pem 2048
+RUN openssl req -new -newkey rsa:2048 -days +100000 -nodes -x509 -keyout $CONFIG_PATH/bump.key -out $CONFIG_PATH/bump.crt -subj "/C=BR/ST=DF/L=Brasilia/O=51390/CN=51390/emailAddress=51390@example.org"
+
 FROM prism
 FROM ecap-stream
 COPY --from=0 /squid /squid
