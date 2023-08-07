@@ -27,6 +27,9 @@ build-prism:
 start:
 	BIND_SOURCE=$(BIND_SOURCE) docker compose up
 
+start-stack:
+	BIND_SOURCE=$(BIND_SOURCE) docker compose -f elastic-stack/stack/docker-compose.yml squid/docker-compose.yml up
+
 stop:
 	BIND_SOURCE=$(BIND_SOURCE) docker compose stop
 
