@@ -27,6 +27,12 @@ build-prism:
 start:
 	BIND_SOURCE=$(BIND_SOURCE) docker compose up
 
+start-stack:
+	# starts the proxy along with an 
+	# elasticsearch/logstash/kibana stack
+	# to be used as a backend
+	BIND_SOURCE=$(BIND_SOURCE) docker compose -f elastic-stack/stack/docker-compose.yml -f squid/docker-compose.yml up
+
 stop:
 	BIND_SOURCE=$(BIND_SOURCE) docker compose stop
 
