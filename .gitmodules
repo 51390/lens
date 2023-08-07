@@ -6,4 +6,4 @@
 	url = git@github.com:51390/prism.git
 [submodule "elastic-stack"]
 	path = elastic-stack
-	url = git@github.com:dpereira/elastic-stack.git
+	url = git@github.com:51390/elastic-stack.git
