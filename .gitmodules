@@ -4,6 +4,3 @@
 [submodule "prism"]
 	path = prism
 	url = git@github.com:51390/prism.git
-[submodule "elastic-stack"]
-	path = elastic-stack
-	url = git@github.com:51390/elastic-stack.git
