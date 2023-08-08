@@ -1,3 +1,5 @@
+# clear possibly dangling pid files
+rm /squid/var/run/squid.pid
 
 ulimit -n 65536
 ulimit -c unlimited
