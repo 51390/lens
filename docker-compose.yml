@@ -15,3 +15,8 @@ services:
       - SYS_PTRACE
     security_opt:
       - seccomp:unconfined
+    networks:
+      - stack
+
+networks:
+    stack:
