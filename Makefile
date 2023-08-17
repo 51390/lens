@@ -10,7 +10,7 @@ VALGRIND_FLAGS:=$(shell test $(VALGRIND) == 1 && echo '"--with-valgrind-debug --
 submodules:
 	git submodule update --init
 
-build: build-ecap-stream build-prism build-elastic-stack
+build: build-ecap-stream build-prism 
 	COMPOSE_DOCKER_CLI_BUILD=1 \
 	DOCKER_BUILDKIT=1 \
 	BIND_SOURCE=$(BIND_SOURCE) \
@@ -25,26 +25,23 @@ build-ecap-stream: submodules
 build-prism: submodules
 	docker build -t prism prism
 
-build-elastic-stack: submodules
-	PROJECT_NAME=$(PROJECT_NAME) make -C elastic-stack build
-
 start:
 	BIND_SOURCE=$(BIND_SOURCE) docker compose up
 
 start-stack:
-	BIND_SOURCE=$(BIND_SOURCE) docker compose -f elastic-stack/stack/docker-compose.yml -f docker-compose.yml -p $(PROJECT_NAME) up
+	BIND_SOURCE=$(BIND_SOURCE) docker compose -f opensearch-stack/docker-compose.yml -f docker-compose.yml -p $(PROJECT_NAME) up
 
 stop:
 	BIND_SOURCE=$(BIND_SOURCE) docker compose stop
 
 stop-stack:
-	BIND_SOURCE=$(BIND_SOURCE) docker compose -f elastic-stack/stack/docker-compose.yml -f docker-compose.yml -p $(PROJECT_NAME) stop
+	BIND_SOURCE=$(BIND_SOURCE) docker compose -f opensearch-stack/docker-compose.yml -f docker-compose.yml -p $(PROJECT_NAME) stop
 
 down:
 	BIND_SOURCE=$(BIND_SOURCE) docker compose down
 
 down-stack:
-	BIND_SOURCE=$(BIND_SOURCE) docker compose -f elastic-stack/stack/docker-compose.yml -f docker-compose.yml -p $(PROJECT_NAME) down
+	BIND_SOURCE=$(BIND_SOURCE) docker compose -f opensearch-stack/docker-compose.yml -f docker-compose.yml -p $(PROJECT_NAME) down
 
 extract-certificate:
 	BIND_SOURCE=$(BIND_SOURCE) docker compose up -d
